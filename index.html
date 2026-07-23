@@ -1,0 +1,646 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#07090D">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>Label Match — Đối chiếu nhãn tự động</title>
+<link rel="manifest" href='data:application/manifest+json,{"name":"Label%20Match","short_name":"LabelMatch","start_url":".","display":"standalone","background_color":"%2307090D","theme_color":"%2307090D"}'>
+<style>
+  :root{
+    --bg:#07090D;
+    --surface:rgba(255,255,255,.045);
+    --surface-solid:#12151B;
+    --stroke:rgba(255,255,255,.09);
+    --stroke-strong:rgba(255,255,255,.16);
+    --yellow:#FFD60A;
+    --green:#30D158;
+    --red:#FF453A;
+    --amber:#FF9F0A;
+    --blue:#64D2FF;
+    --text:#F5F6F7;
+    --muted:#9BA1AB;
+    --mono:ui-monospace,"SF Mono","Cascadia Mono",Consolas,"Roboto Mono",monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Inter","Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+    --r-lg:22px; --r-md:14px; --r-sm:10px;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
+  html,body{margin:0;padding:0;background:var(--bg);color:var(--text);font-family:var(--sans);}
+  body{padding-bottom:44px;background:
+    radial-gradient(1200px 500px at 50% -220px, rgba(255,214,10,.07), transparent 60%),
+    var(--bg);}
+  button,input,textarea{font-family:inherit;}
+  ::selection{background:var(--yellow);color:#000;}
+
+  .wrap{max-width:520px;margin:0 auto;padding:0 14px;}
+
+  /* ── App bar ─────────────────────────── */
+  .appbar{display:flex;align-items:center;gap:12px;padding:20px 4px 14px;}
+  .app-icon{width:42px;height:42px;border-radius:13px;background:linear-gradient(145deg,#FFD60A,#FF9F0A);display:flex;align-items:center;justify-content:center;font-size:21px;flex:none;box-shadow:0 4px 16px rgba(255,214,10,.25);}
+  .appbar h1{font-size:19px;margin:0;font-weight:800;letter-spacing:-.3px;}
+  .appbar .sub{font-size:12px;color:var(--muted);margin-top:1px;}
+
+  /* ── Cards ───────────────────────────── */
+  .card{background:var(--surface);border:1px solid var(--stroke);border-radius:var(--r-lg);padding:16px;margin-bottom:14px;backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);}
+
+  /* ── Scanner ─────────────────────────── */
+  .scan-card{padding:10px;}
+  .scanner{position:relative;width:100%;aspect-ratio:3/4;background:#000;border-radius:16px;overflow:hidden;}
+  #video{width:100%;height:100%;object-fit:cover;display:block;}
+  #fallback-reader{width:100%;height:100%;}
+  #fallback-reader video,#fallback-reader img{width:100% !important;height:100% !important;object-fit:cover;}
+  #fallback-reader__scan_region,#fallback-reader__dashboard{display:none !important;}
+
+  .frame-hint{position:absolute;inset:0;pointer-events:none;}
+  .frame-hint .box{position:absolute;left:8%;right:8%;top:10%;bottom:26%;border:2px dashed rgba(255,214,10,.55);border-radius:14px;}
+  .frame-hint .box::after{content:"Đưa CẢ nhãn vàng + mã QR vào khung";position:absolute;top:-24px;left:0;font-size:11px;color:rgba(255,214,10,.9);letter-spacing:.3px;font-weight:600;}
+
+  .torch-btn{position:absolute;top:12px;right:12px;width:42px;height:42px;border-radius:50%;background:rgba(0,0,0,.45);border:1px solid rgba(255,255,255,.22);color:#fff;font-size:18px;display:flex;align-items:center;justify-content:center;z-index:3;}
+  .torch-btn.on{background:var(--yellow);color:#000;}
+
+  /* progress chips over camera */
+  .chips{position:absolute;left:10px;right:10px;bottom:10px;display:flex;gap:8px;z-index:3;}
+  .chip{flex:1;display:flex;align-items:center;gap:8px;background:rgba(10,12,16,.72);border:1px solid var(--stroke-strong);border-radius:12px;padding:9px 10px;backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);}
+  .chip .ind{width:10px;height:10px;border-radius:50%;flex:none;background:var(--muted);}
+  .chip.wait .ind{background:var(--muted);animation:pulse 1.2s infinite;}
+  .chip.busy .ind{background:var(--blue);animation:pulse .8s infinite;}
+  .chip.done .ind{background:var(--green);animation:none;}
+  .chip .lbl{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;font-weight:700;line-height:1.1;}
+  .chip .val{font-size:11.5px;font-family:var(--mono);color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%;}
+  .chip .col{min-width:0;flex:1;}
+  @keyframes pulse{0%,100%{opacity:1;}50%{opacity:.35;}}
+
+  .ocr-progress{position:absolute;top:12px;left:12px;z-index:3;background:rgba(10,12,16,.72);border:1px solid var(--stroke-strong);border-radius:10px;padding:6px 10px;font-size:11px;color:var(--blue);display:none;font-family:var(--mono);}
+
+  .cam-error{padding:18px;text-align:center;color:var(--muted);font-size:13px;line-height:1.6;}
+  .link-btn{background:none;border:none;color:var(--yellow);font-size:13px;text-decoration:underline;padding:8px 2px;cursor:pointer;}
+  .manual-zone{display:none;margin-top:10px;}
+  .manual-zone.show{display:block;}
+  .manual-zone .row{display:flex;gap:8px;margin-top:8px;}
+  .manual-zone input{flex:1;}
+
+  input[type=text]{width:100%;background:rgba(255,255,255,.06);border:1px solid var(--stroke);border-radius:var(--r-sm);color:var(--text);padding:12px;font-size:16px;font-family:var(--mono);}
+  input[type=text]:focus{outline:2px solid var(--yellow);outline-offset:1px;}
+  textarea{width:100%;background:rgba(255,255,255,.06);border:1px solid var(--stroke);border-radius:var(--r-sm);color:var(--text);padding:12px;font-size:13.5px;line-height:1.55;min-height:88px;resize:vertical;}
+  textarea:focus{outline:2px solid var(--yellow);outline-offset:1px;}
+
+  .btn{appearance:none;border:none;border-radius:13px;padding:14px 18px;font-size:15px;font-weight:700;cursor:pointer;transition:transform .06s;}
+  .btn:active{transform:scale(.97);}
+  .btn-primary{background:linear-gradient(145deg,#FFD60A,#FFB80A);color:#141414;width:100%;box-shadow:0 4px 14px rgba(255,214,10,.22);}
+  .btn-ghost{background:rgba(255,255,255,.07);color:var(--text);border:1px solid var(--stroke);}
+  .btn-row{display:flex;gap:10px;margin-top:12px;}
+  .btn-row .btn{flex:1;}
+
+  /* ── Result sheet ────────────────────── */
+  .result-card{display:none;border-width:1.5px;animation:slideUp .3s ease;}
+  @keyframes slideUp{from{opacity:0;transform:translateY(16px);}to{opacity:1;transform:none;}}
+  .result-card.ok{border-color:rgba(48,209,88,.5);box-shadow:0 0 30px rgba(48,209,88,.10);}
+  .result-card.bad{border-color:rgba(255,69,58,.55);box-shadow:0 0 30px rgba(255,69,58,.12);}
+  .result-card.loose{border-color:rgba(255,159,10,.5);}
+  .verdict{display:flex;align-items:center;gap:12px;}
+  .verdict .big-icon{width:52px;height:52px;border-radius:16px;display:flex;align-items:center;justify-content:center;font-size:26px;font-weight:900;flex:none;}
+  .ok .big-icon{background:rgba(48,209,88,.16);color:var(--green);}
+  .bad .big-icon{background:rgba(255,69,58,.16);color:var(--red);}
+  .loose .big-icon{background:rgba(255,159,10,.16);color:var(--amber);}
+  .verdict .t1{font-size:18px;font-weight:800;letter-spacing:.3px;}
+  .ok .t1{color:var(--green);} .bad .t1{color:var(--red);} .loose .t1{color:var(--amber);}
+  .verdict .t2{font-size:12px;color:var(--muted);margin-top:2px;}
+
+  .pair{margin-top:14px;display:flex;flex-direction:column;gap:8px;}
+  .pair-row{background:rgba(255,255,255,.05);border:1px solid var(--stroke);border-radius:var(--r-md);padding:10px 12px;}
+  .pair-row .src{display:flex;align-items:center;gap:6px;font-size:10px;text-transform:uppercase;letter-spacing:1.2px;font-weight:800;margin-bottom:4px;}
+  .src-dot{width:9px;height:9px;border-radius:3px;flex:none;}
+  .src-yellow{color:#FFD60A;} .src-yellow .src-dot{background:#FFD60A;}
+  .src-white{color:#E8EAED;} .src-white .src-dot{background:#E8EAED;}
+  .pair-row .code{font-family:var(--mono);font-size:15px;font-weight:700;word-break:break-all;line-height:1.45;}
+  .diff-char{background:var(--red);color:#fff;border-radius:3px;padding:0 2px;}
+  .miss-char{background:rgba(255,159,10,.85);color:#1a1200;border-radius:3px;padding:0 2px;}
+
+  .note-block{margin-top:14px;}
+  .note-block .nb-label{font-size:10px;text-transform:uppercase;letter-spacing:1.2px;color:var(--muted);font-weight:800;margin-bottom:6px;}
+
+  /* ── History ─────────────────────────── */
+  .hist-head{display:flex;align-items:center;justify-content:space-between;cursor:pointer;}
+  .hist-head .h-title{font-size:13px;text-transform:uppercase;letter-spacing:1.4px;color:var(--muted);font-weight:800;}
+  .hist-stats{display:flex;gap:6px;}
+  .stat-pill{font-family:var(--mono);font-size:11px;padding:3px 9px;border-radius:99px;border:1px solid var(--stroke);}
+  .stat-pill.g{color:var(--green);border-color:rgba(48,209,88,.4);}
+  .stat-pill.r{color:var(--red);border-color:rgba(255,69,58,.4);}
+  .hist-list{max-height:360px;overflow-y:auto;margin-top:12px;}
+  .hist-row{display:flex;align-items:flex-start;gap:10px;padding:10px 2px;border-bottom:1px solid var(--stroke);}
+  .hist-row:last-child{border-bottom:none;}
+  .hist-icon{width:22px;height:22px;border-radius:8px;flex:none;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:900;margin-top:1px;}
+  .hist-icon.ok{background:rgba(48,209,88,.16);color:var(--green);}
+  .hist-icon.bad{background:rgba(255,69,58,.16);color:var(--red);}
+  .hist-icon.loose{background:rgba(255,159,10,.16);color:var(--amber);}
+  .hist-main{flex:1;min-width:0;}
+  .hist-main .t{font-family:var(--mono);font-size:12.5px;font-weight:700;word-break:break-all;}
+  .hist-main .m{font-size:11px;color:var(--muted);margin-top:2px;}
+  .hist-main .note{font-size:11.5px;color:var(--amber);margin-top:3px;line-height:1.45;}
+  .hist-del{background:none;border:none;color:var(--muted);font-size:15px;padding:4px 6px;cursor:pointer;flex:none;}
+  .hist-empty{color:var(--muted);font-size:13px;text-align:center;padding:20px 0;}
+
+  .toast{position:fixed;left:50%;bottom:26px;transform:translateX(-50%);background:var(--surface-solid);border:1px solid var(--stroke-strong);color:var(--text);padding:11px 18px;border-radius:13px;font-size:13px;box-shadow:0 8px 26px rgba(0,0,0,.5);opacity:0;pointer-events:none;transition:opacity .2s,transform .2s;z-index:50;max-width:88vw;text-align:center;}
+  .toast.show{opacity:1;transform:translateX(-50%) translateY(-6px);}
+
+  footer{padding:16px 6px 30px;text-align:center;color:var(--muted);font-size:11px;line-height:1.7;}
+
+  @media (prefers-reduced-motion:reduce){*{animation:none !important;transition:none !important;}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="appbar">
+    <div class="app-icon">⛶</div>
+    <div>
+      <h1>Label Match</h1>
+      <div class="sub">Tự động đối chiếu ITEM NO — nhãn vàng ↔ nhãn QR trắng</div>
+    </div>
+  </header>
+
+  <div class="card scan-card" id="scanCard">
+    <div class="scanner" id="scannerBox">
+      <video id="video" playsinline muted autoplay></video>
+      <div id="fallback-reader"></div>
+      <div class="frame-hint"><div class="box"></div></div>
+      <button class="torch-btn" id="torchBtn" title="Đèn flash" style="display:none;">🔦</button>
+      <div class="ocr-progress" id="ocrProgress">Đang tải bộ đọc chữ…</div>
+      <div class="chips">
+        <div class="chip wait" id="chipQr">
+          <div class="ind"></div>
+          <div class="col">
+            <div class="lbl">QR · Nhãn trắng</div>
+            <div class="val" id="chipQrVal">Đang tìm…</div>
+          </div>
+        </div>
+        <div class="chip wait" id="chipOcr">
+          <div class="ind"></div>
+          <div class="col">
+            <div class="lbl">ITEM NO · Nhãn vàng</div>
+            <div class="val" id="chipOcrVal">Đang đọc chữ…</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div id="camError" class="cam-error" style="display:none;"></div>
+    <button class="link-btn" id="toggleManualBtn" type="button">Nhập tay (khi camera / OCR không dùng được)</button>
+    <div class="manual-zone" id="manualZone">
+      <div class="row"><input type="text" id="mQr" placeholder="Mã QR nhãn trắng" autocapitalize="characters" spellcheck="false"></div>
+      <div class="row"><input type="text" id="mYellow" placeholder="ITEM NO nhãn vàng" autocapitalize="characters" spellcheck="false"></div>
+      <div class="row"><button class="btn btn-primary" id="mCompareBtn" type="button" style="width:100%;">Đối chiếu</button></div>
+    </div>
+  </div>
+
+  <div class="card result-card" id="resultCard">
+    <div class="verdict">
+      <div class="big-icon" id="vIcon">✓</div>
+      <div>
+        <div class="t1" id="vTitle">—</div>
+        <div class="t2" id="vSub">—</div>
+      </div>
+    </div>
+    <div class="pair">
+      <div class="pair-row">
+        <div class="src src-yellow"><span class="src-dot"></span>Nhãn vàng · ITEM NO (đọc bằng OCR)</div>
+        <div class="code" id="codeYellow">—</div>
+      </div>
+      <div class="pair-row">
+        <div class="src src-white"><span class="src-dot"></span>Nhãn trắng · mã QR (giải mã)</div>
+        <div class="code" id="codeWhite">—</div>
+      </div>
+    </div>
+    <div class="note-block">
+      <div class="nb-label">Ghi chú lệch (tự sinh — sửa được)</div>
+      <textarea id="noteBox"></textarea>
+    </div>
+    <div class="btn-row">
+      <button class="btn btn-ghost" id="rescanBtn" type="button">📷 Kiện tiếp theo</button>
+      <button class="btn btn-primary" id="saveBtn" type="button">💾 Lưu kết quả</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="hist-head" id="histHead">
+      <div class="h-title">Lịch sử kiểm tra</div>
+      <div class="hist-stats" id="histStats"><span class="stat-pill">0</span></div>
+    </div>
+    <div id="histBody" style="display:none;">
+      <div class="hist-list" id="histList"><div class="hist-empty">Chưa có lượt kiểm tra nào.</div></div>
+      <div class="btn-row">
+        <button class="btn btn-ghost" id="exportBtn" type="button">Xuất CSV</button>
+        <button class="btn btn-ghost" id="clearHistBtn" type="button">Xoá lịch sử</button>
+      </div>
+    </div>
+  </div>
+
+  <footer>
+    Xử lý hoàn toàn trên máy — không gửi ảnh đi đâu. Lần đầu mở cần mạng để tải bộ đọc chữ (~3&nbsp;MB), sau đó trình duyệt tự lưu.<br>
+    OCR đọc chữ qua camera có thể sai khi thiếu sáng / mờ — kết quả LỆCH luôn cần nhìn lại nhãn bằng mắt trước khi kết luận.
+  </footer>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+(function(){
+  "use strict";
+
+  // ═══════════ refs ═══════════
+  const $ = id => document.getElementById(id);
+  const video=$('video'), scannerBox=$('scannerBox'), camError=$('camError'),
+    torchBtn=$('torchBtn'), ocrProgress=$('ocrProgress'),
+    chipQr=$('chipQr'), chipQrVal=$('chipQrVal'),
+    chipOcr=$('chipOcr'), chipOcrVal=$('chipOcrVal'),
+    resultCard=$('resultCard'), vIcon=$('vIcon'), vTitle=$('vTitle'), vSub=$('vSub'),
+    codeYellow=$('codeYellow'), codeWhite=$('codeWhite'), noteBox=$('noteBox'),
+    rescanBtn=$('rescanBtn'), saveBtn=$('saveBtn'),
+    histHead=$('histHead'), histBody=$('histBody'), histList=$('histList'), histStats=$('histStats'),
+    exportBtn=$('exportBtn'), clearHistBtn=$('clearHistBtn'),
+    toggleManualBtn=$('toggleManualBtn'), manualZone=$('manualZone'),
+    mQr=$('mQr'), mYellow=$('mYellow'), mCompareBtn=$('mCompareBtn'),
+    toastEl=$('toast');
+
+  // ═══════════ state ═══════════
+  let stream=null, detector=null, usingFallback=false, html5QrCode=null;
+  let qrTimer=null, ocrTimer=null, paused=false, torchOn=false;
+  let qrValue=null;                 // decoded from white label
+  let ocrConfirmed=null;            // confirmed ITEM NO from yellow label
+  let ocrReads={};                  // read -> count (for stability voting)
+  let ocrWorker=null, ocrBusy=false, ocrReady=false, ocrFailed=false;
+  let lastResult=null;
+  let historyLog=[];
+  const STORAGE_KEY='qr-label-check-history';
+  const snapCanvas=document.createElement('canvas');
+
+  // ═══════════ utils ═══════════
+  function toast(msg,ms){
+    toastEl.textContent=msg; toastEl.classList.add('show');
+    clearTimeout(toastEl._t); toastEl._t=setTimeout(()=>toastEl.classList.remove('show'),ms||2400);
+  }
+  const normStrict=s=>(s||'').trim().toUpperCase().replace(/\s+/g,'');
+  const normLoose=s=>normStrict(s).replace(/[^A-Z0-9]/g,'');
+  const escapeHtml=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  function loadScript(src){return new Promise((ok,err)=>{const s=document.createElement('script');s.src=src;s.onload=ok;s.onerror=()=>err(new Error('load-fail'));document.head.appendChild(s);});}
+  function setChip(el,state,valEl,text){el.className='chip '+state;valEl.textContent=text;}
+
+  // ═══════════ camera ═══════════
+  async function initCamera(){
+    try{
+      stream=await navigator.mediaDevices.getUserMedia({
+        video:{facingMode:{ideal:'environment'},width:{ideal:1920},height:{ideal:1080}},audio:false
+      });
+    }catch(err){ showCameraError(err); return; }
+    video.srcObject=stream;
+    try{await video.play();}catch(e){}
+    setupTorch();
+
+    let nativeOk=false;
+    if('BarcodeDetector' in window){
+      try{
+        const fm=await window.BarcodeDetector.getSupportedFormats();
+        if(fm&&fm.includes('qr_code')){detector=new window.BarcodeDetector({formats:['qr_code']});nativeOk=true;}
+      }catch(e){}
+    }
+    if(nativeOk){
+      qrTimer=setInterval(qrTickNative,240);
+    }else{
+      await startFallbackQr();
+    }
+    initOcr(); // load OCR engine in parallel
+  }
+
+  async function qrTickNative(){
+    if(paused||!detector||qrValue) return;
+    try{
+      const codes=await detector.detect(video);
+      if(codes&&codes.length) onQr(codes[0].rawValue);
+    }catch(e){}
+  }
+
+  async function startFallbackQr(){
+    // html5-qrcode manages its own camera; release ours first
+    try{stream.getTracks().forEach(t=>t.stop());}catch(e){}
+    video.style.display='none';
+    try{
+      if(!window.Html5Qrcode) await loadScript('https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js');
+      html5QrCode=new Html5Qrcode('fallback-reader',{verbose:false});
+      await html5QrCode.start({facingMode:'environment'},{fps:8,qrbox:{width:250,height:250}},
+        t=>{if(!paused&&!qrValue)onQr(t);},()=>{});
+      usingFallback=true;
+      // grab the fallback's video element so OCR can snapshot it too
+      const fv=document.querySelector('#fallback-reader video');
+      if(fv) snapSource=fv;
+    }catch(err){ showCameraError(err); }
+  }
+
+  let snapSource=video;
+
+  function showCameraError(err){
+    scannerBox.style.display='none';
+    camError.style.display='block';
+    camError.textContent='Không mở được camera ('+(err&&err.message?err.message:'không rõ')+'). Hãy cấp quyền Camera rồi tải lại trang, hoặc dùng chế độ nhập tay bên dưới.';
+    manualZone.classList.add('show');
+  }
+
+  function setupTorch(){
+    const tr=stream&&stream.getVideoTracks?stream.getVideoTracks()[0]:null;
+    if(!tr||!tr.getCapabilities)return;
+    try{ if(tr.getCapabilities().torch) torchBtn.style.display='flex'; }catch(e){}
+  }
+  torchBtn.addEventListener('click',async()=>{
+    try{
+      const tr=stream.getVideoTracks()[0];
+      await tr.applyConstraints({advanced:[{torch:!torchOn}]});
+      torchOn=!torchOn; torchBtn.classList.toggle('on',torchOn);
+    }catch(e){ toast('Đèn flash không khả dụng'); }
+  });
+
+  // ═══════════ OCR engine (tesseract.js) ═══════════
+  async function initOcr(){
+    ocrProgress.style.display='block';
+    ocrProgress.textContent='Tải bộ đọc chữ… 0%';
+    try{
+      if(!window.Tesseract){
+        try{ await loadScript('https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js'); }
+        catch(e){ await loadScript('https://unpkg.com/tesseract.js@5/dist/tesseract.min.js'); }
+      }
+      ocrWorker=await Tesseract.createWorker('eng',1,{
+        logger:m=>{
+          if(m&&m.progress!=null&&(m.status||'').includes('load')){
+            ocrProgress.textContent='Tải bộ đọc chữ… '+Math.round(m.progress*100)+'%';
+          }
+        }
+      });
+      await ocrWorker.setParameters({
+        tessedit_char_whitelist:'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789().:-/ ',
+        preserve_interword_spaces:'1'
+      });
+      ocrReady=true;
+      ocrProgress.style.display='none';
+      ocrTimer=setInterval(ocrTick,1600);
+    }catch(err){
+      ocrFailed=true;
+      ocrProgress.style.display='none';
+      setChip(chipOcr,'wait',chipOcrVal,'OCR lỗi — nhập tay');
+      manualZone.classList.add('show');
+      toast('Không tải được bộ đọc chữ (mạng?). Vẫn quét QR được — ITEM NO nhãn vàng hãy nhập tay.',4200);
+    }
+  }
+
+  async function ocrTick(){
+    if(paused||ocrBusy||!ocrReady||ocrConfirmed) return;
+    const src=snapSource;
+    if(!src||!src.videoWidth) return;
+    ocrBusy=true;
+    setChip(chipOcr,'busy',chipOcrVal,'Đang đọc chữ…');
+    try{
+      // snapshot at ~1100px wide for speed/accuracy balance
+      const scale=Math.min(1,1100/src.videoWidth);
+      snapCanvas.width=Math.round(src.videoWidth*scale);
+      snapCanvas.height=Math.round(src.videoHeight*scale);
+      const ctx=snapCanvas.getContext('2d');
+      ctx.drawImage(src,0,0,snapCanvas.width,snapCanvas.height);
+      const res=await ocrWorker.recognize(snapCanvas);
+      const token=extractItemNo(res&&res.data?res.data.text:'');
+      if(token){
+        ocrReads[token]=(ocrReads[token]||0)+1;
+        // accept immediately if it matches the QR (strong mutual evidence);
+        // otherwise require the same read twice to avoid OCR false alarms
+        if(qrValue&&normLoose(token)===normLoose(qrValue)){ confirmOcr(token); }
+        else if(ocrReads[token]>=2){ confirmOcr(token); }
+        else{ setChip(chipOcr,'busy',chipOcrVal,'Thấy: '+token+' — xác nhận lại…'); }
+      }else{
+        setChip(chipOcr,'wait',chipOcrVal,'Chưa thấy dòng ITEM NO…');
+      }
+    }catch(e){
+      setChip(chipOcr,'wait',chipOcrVal,'Đang đọc chữ…');
+    }
+    ocrBusy=false;
+  }
+
+  function extractItemNo(text){
+    if(!text) return null;
+    const lines=text.split('\n').map(l=>l.trim()).filter(Boolean);
+    for(let i=0;i<lines.length;i++){
+      const up=lines[i].toUpperCase();
+      // matches ITEM NO / ITEM N0 / 1TEM NO with flexible separators
+      if(/[I1]TEM\s*N[O0]/.test(up)){
+        let val=up.replace(/^.*?[I1]TEM\s*N[O0]\.?\s*[:;]?\s*/,'');
+        let j=i+1;
+        // pull continuation lines: code wrapped over 2 lines on the label
+        while(j<lines.length){
+          const nx=lines[j].toUpperCase();
+          if(/^(ITEM|SIZE|QTY|P\.?\s?O|MADE|TO)\b/.test(nx)) break;
+          const isCodeLine=/^[A-Z0-9()\-\.\/]+$/.test(nx.replace(/\s+/g,''));
+          if(val.endsWith('-')||(isCodeLine&&nx.length<=20)){ val+=nx; j++; }
+          else break;
+        }
+        val=val.replace(/\s+/g,'').replace(/[^A-Z0-9()\-\.\/]/g,'');
+        val=val.replace(/[\.\-:]+$/,'');
+        if(val.replace(/[^A-Z0-9]/g,'').length>=5) return val;
+        return null;
+      }
+    }
+    return null;
+  }
+
+  function confirmOcr(token){
+    ocrConfirmed=token;
+    setChip(chipOcr,'done',chipOcrVal,token);
+    if(navigator.vibrate)navigator.vibrate(40);
+    maybeCompare();
+  }
+
+  // ═══════════ QR ═══════════
+  function onQr(text){
+    qrValue=text;
+    setChip(chipQr,'done',chipQrVal,text);
+    if(navigator.vibrate)navigator.vibrate(40);
+    maybeCompare();
+  }
+
+  // ═══════════ compare + notes ═══════════
+  function maybeCompare(){
+    if(!qrValue||!ocrConfirmed) return;
+    runCompare(ocrConfirmed,qrValue,true);
+  }
+
+  function runCompare(yellowVal,whiteVal,isAuto){
+    paused=true;
+    let status;
+    if(normStrict(yellowVal)===normStrict(whiteVal)) status='match';
+    else if(normLoose(yellowVal)===normLoose(whiteVal)) status='loose';
+    else status='mismatch';
+
+    const note=buildNote(status,yellowVal,whiteVal,isAuto);
+    lastResult={ts:Date.now(),yellow:yellowVal,white:whiteVal,status,note,auto:!!isAuto};
+    renderResult(lastResult);
+  }
+
+  function buildNote(status,yellowVal,whiteVal,isAuto){
+    const a=normStrict(yellowVal), b=normStrict(whiteVal);
+    if(status==='match') return 'Khớp hoàn toàn. Nhãn vàng và nhãn trắng cùng mã: '+a+'.';
+    const parts=[];
+    if(status==='loose'){
+      parts.push('Nội dung ký tự giống nhau nhưng khác định dạng (dấu cách / ký tự phân cách).');
+      parts.push('Nhãn VÀNG: "'+yellowVal+'" — Nhãn TRẮNG (QR): "'+whiteVal+'".');
+    }else{
+      if(a.length!==b.length){
+        const longer=a.length>b.length?'VÀNG':'TRẮNG';
+        parts.push('LỆCH ĐỘ DÀI: nhãn VÀNG '+a.length+' ký tự, nhãn TRẮNG '+b.length+' ký tự (nhãn '+longer+' dài hơn '+Math.abs(a.length-b.length)+' ký tự).');
+        // common prefix
+        let p=0; while(p<a.length&&p<b.length&&a[p]===b[p])p++;
+        if(p>0) parts.push('Giống nhau '+p+' ký tự đầu ("'+a.slice(0,p)+'"), bắt đầu lệch từ vị trí '+(p+1)+': nhãn VÀNG còn "'+(a.slice(p)||'(hết)')+'", nhãn TRẮNG còn "'+(b.slice(p)||'(hết)')+'".');
+      }else{
+        const diffs=[];
+        for(let i=0;i<a.length;i++) if(a[i]!==b[i]) diffs.push({pos:i+1,y:a[i],w:b[i]});
+        parts.push('LỆCH '+diffs.length+' ký tự (cùng độ dài '+a.length+'):');
+        diffs.slice(0,8).forEach(d=>parts.push('• Vị trí '+d.pos+': nhãn VÀNG "'+d.y+'" ≠ nhãn TRẮNG "'+d.w+'".'));
+        if(diffs.length>8) parts.push('… và '+(diffs.length-8)+' vị trí khác.');
+      }
+    }
+    if(isAuto) parts.push('Lưu ý: mã nhãn VÀNG do OCR đọc qua camera — cần nhìn lại nhãn bằng mắt để loại trừ OCR đọc sai trước khi kết luận dán nhầm.');
+    return parts.join('\n');
+  }
+
+  function diffHtmlPair(a,b){
+    if(a.length===b.length){
+      let ha='',hb='';
+      for(let i=0;i<a.length;i++){
+        if(a[i]===b[i]){ha+=escapeHtml(a[i]);hb+=escapeHtml(b[i]);}
+        else{ha+='<span class="diff-char">'+escapeHtml(a[i])+'</span>';hb+='<span class="diff-char">'+escapeHtml(b[i])+'</span>';}
+      }
+      return [ha,hb];
+    }
+    // different lengths: highlight beyond common prefix
+    let p=0; while(p<a.length&&p<b.length&&a[p]===b[p])p++;
+    const mk=(s)=>escapeHtml(s.slice(0,p))+(s.length>p?'<span class="miss-char">'+escapeHtml(s.slice(p))+'</span>':'');
+    return [mk(a),mk(b)];
+  }
+
+  function renderResult(r){
+    resultCard.style.display='block';
+    resultCard.className='card result-card '+(r.status==='match'?'ok':(r.status==='loose'?'loose':'bad'));
+    vIcon.textContent=r.status==='match'?'✓':(r.status==='loose'?'≈':'✗');
+    vTitle.textContent=r.status==='match'?'ĐÃ KHỚP':(r.status==='loose'?'KHÁC ĐỊNH DẠNG':'SAI LỆCH');
+    vSub.textContent=r.auto?'Đối chiếu tự động: QR + OCR':'Đối chiếu từ dữ liệu nhập tay';
+    const[hy,hw]=diffHtmlPair(normStrict(r.yellow),normStrict(r.white));
+    codeYellow.innerHTML=hy; codeWhite.innerHTML=hw;
+    noteBox.value=r.note;
+    resultCard.scrollIntoView({behavior:'smooth',block:'nearest'});
+    if(navigator.vibrate)navigator.vibrate(r.status==='mismatch'?[90,60,90]:50);
+    if(r.status==='mismatch')toast('⚠ Phát hiện lệch — xem ghi chú chi tiết',3200);
+  }
+
+  rescanBtn.addEventListener('click',resetForNext);
+  function resetForNext(){
+    resultCard.style.display='none';
+    qrValue=null; ocrConfirmed=null; ocrReads={}; lastResult=null;
+    setChip(chipQr,'wait',chipQrVal,'Đang tìm…');
+    setChip(chipOcr,ocrFailed?'wait':'wait',chipOcrVal,ocrFailed?'OCR lỗi — nhập tay':'Đang đọc chữ…');
+    mQr.value=''; mYellow.value='';
+    paused=false;
+    if(usingFallback&&html5QrCode){try{html5QrCode.resume();}catch(e){}}
+    window.scrollTo({top:0,behavior:'smooth'});
+  }
+
+  saveBtn.addEventListener('click',()=>{
+    if(!lastResult)return;
+    lastResult.note=noteBox.value.trim();
+    historyLog.unshift(lastResult);
+    persistHistory(); renderHistory();
+    toast('Đã lưu kết quả');
+    resetForNext();
+  });
+
+  // ═══════════ manual mode ═══════════
+  toggleManualBtn.addEventListener('click',()=>manualZone.classList.toggle('show'));
+  [mQr,mYellow].forEach(inp=>inp.addEventListener('input',()=>{inp.value=inp.value.toUpperCase();}));
+  mCompareBtn.addEventListener('click',()=>{
+    const w=mQr.value.trim()||qrValue, y=mYellow.value.trim()||ocrConfirmed;
+    if(!w||!y){toast('Cần đủ cả hai mã (QR trắng + ITEM NO vàng)');return;}
+    runCompare(y,w,false);
+  });
+
+  // ═══════════ history ═══════════
+  async function loadHistory(){
+    try{
+      const res=await window.storage.get(STORAGE_KEY,false);
+      if(res&&res.value){const p=JSON.parse(res.value);if(Array.isArray(p))historyLog=p;}
+    }catch(e){historyLog=[];}
+    renderHistory();
+  }
+  async function persistHistory(){
+    try{await window.storage.set(STORAGE_KEY,JSON.stringify(historyLog),false);}
+    catch(e){toast('Không lưu được lịch sử (lỗi bộ nhớ)');}
+  }
+  const fmtTime=ts=>{try{return new Date(ts).toLocaleString('vi-VN',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});}catch(e){return'';}};
+
+  function renderHistory(){
+    const n=historyLog.length,
+      ok=historyLog.filter(h=>h.status==='match').length,
+      bad=historyLog.filter(h=>h.status==='mismatch').length;
+    histStats.innerHTML=n
+      ?'<span class="stat-pill g">✓ '+ok+'</span><span class="stat-pill r">✗ '+bad+'</span><span class="stat-pill">'+n+'</span>'
+      :'<span class="stat-pill">0</span>';
+    if(!n){histList.innerHTML='<div class="hist-empty">Chưa có lượt kiểm tra nào.</div>';return;}
+    histList.innerHTML=historyLog.map((h,idx)=>{
+      const ic=h.status==='match'?'ok':(h.status==='loose'?'loose':'bad');
+      const ch=h.status==='match'?'✓':(h.status==='loose'?'≈':'✗');
+      const noteShort=(h.status!=='match'&&h.note)?('<div class="note">'+escapeHtml(h.note.split('\n')[0])+'</div>'):'';
+      return '<div class="hist-row">'+
+        '<div class="hist-icon '+ic+'">'+ch+'</div>'+
+        '<div class="hist-main">'+
+          '<div class="t">'+escapeHtml(h.white)+'</div>'+
+          '<div class="m">'+fmtTime(h.ts)+' · '+(h.auto?'tự động':'nhập tay')+'</div>'+noteShort+
+        '</div>'+
+        '<button class="hist-del" data-idx="'+idx+'">✕</button>'+
+      '</div>';
+    }).join('');
+    histList.querySelectorAll('.hist-del').forEach(btn=>{
+      btn.addEventListener('click',()=>{
+        historyLog.splice(parseInt(btn.getAttribute('data-idx'),10),1);
+        persistHistory();renderHistory();
+      });
+    });
+  }
+
+  histHead.addEventListener('click',()=>{histBody.style.display=histBody.style.display==='none'?'block':'none';});
+
+  clearHistBtn.addEventListener('click',()=>{
+    if(!historyLog.length)return;
+    if(!confirm('Xoá toàn bộ '+historyLog.length+' lượt kiểm tra đã lưu?'))return;
+    historyLog=[];persistHistory();renderHistory();
+  });
+
+  exportBtn.addEventListener('click',()=>{
+    if(!historyLog.length){toast('Chưa có dữ liệu để xuất');return;}
+    const rows=[['Thời gian','Nguồn','Mã nhãn vàng (ITEM NO)','Mã nhãn trắng (QR)','Kết quả','Ghi chú lệch']];
+    historyLog.forEach(h=>{
+      const kq=h.status==='match'?'Khớp':(h.status==='loose'?'Khác định dạng':'Sai lệch');
+      rows.push([fmtTime(h.ts),h.auto?'Tự động':'Nhập tay',h.yellow,h.white,kq,(h.note||'').replace(/\n/g,' | ')]);
+    });
+    const esc=v=>{v=String(v==null?'':v);return /[",\r\n]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v;};
+    const csv='\uFEFF'+rows.map(r=>r.map(esc).join(',')).join('\r\n');
+    const blob=new Blob([csv],{type:'text/csv;charset=utf-8;'});
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement('a');
+    a.href=url;a.download='doi-chieu-nhan-'+new Date().toISOString().slice(0,10)+'.csv';
+    document.body.appendChild(a);a.click();document.body.removeChild(a);
+    setTimeout(()=>URL.revokeObjectURL(url),2000);
+  });
+
+  // ═══════════ init ═══════════
+  if(location.protocol!=='https:'&&location.hostname!=='localhost'&&location.hostname!=='127.0.0.1'){
+    toast('Cần mở qua HTTPS để dùng camera',3600);
+  }
+  loadHistory();
+  initCamera();
+})();
+</script>
+</body>
+</html>
