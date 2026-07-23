@@ -103,7 +103,9 @@
 
 <div class="cam-wrap">
   <video id="video" playsinline muted autoplay></video>
-  <div class="frame"></div>
+  <div class="frame" id="frameWide"></div>
+  <div id="frameBand" style="display:none;position:absolute;left:5%;right:5%;top:32%;height:26%;border:2px dashed rgba(61,220,132,.85);border-radius:18px;pointer-events:none"></div>
+  <div id="stepBanner" style="position:absolute;top:10px;left:10px;right:10px;background:rgba(13,13,16,.88);border:1px solid var(--line);border-radius:14px;padding:10px 14px;font-size:14px;color:var(--gold);text-align:center">Bước 1: Quét mã QR trên nhãn trắng</div>
   <div class="chips">
     <div class="chip"><div class="k"><span class="dot" id="dotQR"></span>QR · Nhãn trắng</div><div class="v mono" id="chipQR">Đang chờ…</div></div>
     <div class="chip"><div class="k"><span class="dot" id="dotOCR"></span>Item No · Nhãn vàng</div><div class="v mono" id="chipOCR">Bấm 📸 để đọc</div></div>
@@ -313,8 +315,8 @@ function procMsg(kind,text){
   el.className="proc-msg show "+kind; el.textContent=text;
 }
 
-function showResult(qr, ocr, extraNote){
-  const r = compareLabels(qr, ocr);
+function showResult(qr, ocr, extraNote, override){
+  const r = Object.assign(compareLabels(qr, ocr), override||{});
   current = {qr, ocr, ...r, at:new Date().toISOString()};
   if(extraNote) current.note = r.note+" "+extraNote;
   lastShotCand=null;
@@ -359,6 +361,7 @@ function resetScan(){
   $("chipQR").textContent="Đang chờ…"; $("chipOCR").textContent="Bấm 📸 để đọc";
   $("dotQR").className=$("dotOCR").className="dot";
   procMsg(null);
+  updateStep();
 }
 
 $("manualLink").onclick=e=>{e.preventDefault();$("manualBox").classList.toggle("show");};
@@ -409,7 +412,7 @@ const AUTO_MS=3000;
    khớp (đã qua thẩm định). Nghi lệch / chưa rõ => nhắc bấm 📸 xác nhận. */
 async function autoScan(){
   if(autoBusy||shotBusy||!ocrWorker||current) return;
-  if(!qrLive||Date.now()-qrSeenAt>QR_FRESH_MS) return;
+  if(!qrLive) return;
   autoBusy=true;
   try{
     const qr=qrLive, qc=normCore(qr);
@@ -422,8 +425,16 @@ async function autoScan(){
       const cand=extractItemNo(raw);
       let ocrDisplay=f.sub;
       if(cand && fuzzyFind(qc,normCore(cand)).dist<=rel*qc.length+2) ocrDisplay=cand;
-      const r=compareLabels(qr,ocrDisplay);
-      if(r.verdict==="MATCH"||r.verdict==="MATCH_FORMAT_ONLY"){
+      let r=compareLabels(qr,ocrDisplay);
+      /* Lệch nhỏ 1-2 ký tự => thẻ VÀNG "xác nhận mắt" thay vì đỏ:
+         với QR làm chuẩn, đa số là OCR đọc sai ký tự chứ không phải nhãn in sai */
+      if(r.verdict==="MISMATCH" && f.dist<=2){
+        $("chipOCR").textContent=ocrDisplay; $("dotOCR").className="dot on";
+        showResult(qr,ocrDisplay,null,{verdict:"MATCH_LOOSE",title:"Gần khớp — xác nhận mắt",
+          note:`GẦN KHỚP: lệch ${f.dist} ký tự — khả năng cao là OCR đọc sai. Nhìn nhãn thật để xác nhận rồi sửa ghi chú nếu cần. QR: "${qr}" | OCR: "${ocrDisplay}".`});
+        return;
+      }
+      if(r.verdict==="MATCH"||r.verdict==="MATCH_FORMAT_ONLY"||r.verdict==="MATCH_LOOSE"){
         $("chipOCR").textContent=ocrDisplay; $("dotOCR").className="dot on";
         showResult(qr,ocrDisplay);
       }else{
@@ -441,13 +452,19 @@ function loop(){
     try{
       const q=scanQRFrame();
       if(q){
+        if(qrLive && q!==qrLive){
+          /* Thấy QR KHÁC => đã chuyển sang kiện mới: xóa kết quả kiện cũ */
+          current=null; lastShotCand=null;
+          $("card").className="card";
+          procMsg("info","Đã nhận kiện mới theo QR vừa quét.");
+        }
         qrLive=q; qrSeenAt=Date.now();
         $("chipQR").textContent=q; $("dotQR").className="dot on";
-      }else if(qrLive && Date.now()-qrSeenAt>QR_FRESH_MS){
-        // QR đã rời khung quá lâu => hết hiệu lực (chống "kết quả ma")
-        qrLive=null;
-        $("chipQR").textContent="Đang chờ…"; $("dotQR").className="dot";
+        updateStep();
       }
+      /* QR được KHÓA THEO PHIÊN KIỆN — không tự hết hạn nữa, vì thao tác
+         chuẩn là quét QR xong rồi rời sang soi sát nhãn vàng (lâu hơn 8s).
+         Muốn bỏ QR hiện tại: bấm "Kiện tiếp theo" hoặc quét QR khác. */
       if($("autoChk").checked && Date.now()-lastAutoAt>AUTO_MS){
         lastAutoAt=Date.now(); autoScan();
       }
@@ -469,12 +486,26 @@ function otsu(hist,total){
   }
   return th;
 }
+function updateStep(){
+  const locked=!!qrLive;
+  $("stepBanner").textContent = locked
+    ? "Bước 2: Soi SÁT dòng ITEM NO nhãn vàng vào băng ngắm xanh"
+    : "Bước 1: Quét mã QR trên nhãn trắng";
+  $("stepBanner").style.color = locked ? "var(--ok)" : "var(--gold)";
+  $("frameBand").style.display = locked ? "block" : "none";
+  $("frameWide").style.display = locked ? "none" : "block";
+}
+
 function makeOcrCanvas(binarize){
   const w=video.videoWidth,h=video.videoHeight;
-  const cx=Math.round(w*.06), cy=Math.round(h*.06), cw=Math.round(w*.88), ch=Math.round(h*.64);
-  /* QA cho thấy ảnh ~1100px đọc tốt ngang ảnh phóng 2x (≈3500px, ~6MP)
-     nhưng nhanh gấp nhiều lần trên điện thoại => cap bề rộng, không phóng to */
-  const scale=Math.min(1, 1100/cw);
+  /* Bước 2 (đã có QR): chỉ đọc BĂNG NGẮM hẹp giữa khung — ảnh nhỏ hơn ~2 lần
+     => nhanh hơn ~2 lần và ít dính chữ nhiễu xung quanh. Chưa có QR: crop rộng. */
+  const narrow=!!qrLive;
+  const cx=Math.round(w*(narrow?.05:.06));
+  const cy=Math.round(h*(narrow?.30:.06));
+  const cw=Math.round(w*(narrow?.90:.88));
+  const ch=Math.round(h*(narrow?.30:.64));
+  const scale=Math.min(1, (narrow?1000:1100)/cw);
   const c=document.createElement("canvas");
   c.width=Math.round(cw*scale); c.height=Math.round(ch*scale);
   const g=c.getContext("2d"); g.imageSmoothingEnabled=true;
@@ -507,10 +538,9 @@ $("btnShot").onclick=async ()=>{
   procMsg("info","Đang đọc nhãn từ khung hình hiện tại…");
 
   try{
-    /* (1) QR: ưu tiên frame hiện tại; chấp nhận QR thấy trong 8s gần nhất */
+    /* (1) QR: dùng QR đã khóa theo phiên; nếu chưa có thì thử đọc frame hiện tại */
     frameNo=0;
-    let qr=scanQRFrame();
-    if(!qr && qrLive && Date.now()-qrSeenAt<=QR_FRESH_MS) qr=qrLive;
+    let qr=qrLive || scanQRFrame();
     if(!qr){
       procMsg("warn","Chưa thấy mã QR (nhãn trắng). Đưa QR vào khung — rõ, không lóa — rồi bấm Chụp lại.");
       return;
@@ -537,7 +567,14 @@ $("btnShot").onclick=async ()=>{
       let ocrDisplay = best.sub;
       if(cand && fuzzyFind(qc,normCore(cand)).dist <= best.rel*qc.length+1) ocrDisplay=cand;
       $("chipOCR").textContent=ocrDisplay; $("dotOCR").className="dot on";
-      showResult(qr, ocrDisplay);
+      const d=Math.round(best.rel*qc.length);
+      const r0=compareLabels(qr,ocrDisplay);
+      if(r0.verdict==="MISMATCH" && d<=2){
+        showResult(qr,ocrDisplay,null,{verdict:"MATCH_LOOSE",title:"Gần khớp — xác nhận mắt",
+          note:`GẦN KHỚP: lệch ${d} ký tự — khả năng cao là OCR đọc sai. Nhìn nhãn thật để xác nhận rồi sửa ghi chú nếu cần. QR: "${qr}" | OCR: "${ocrDisplay}".`});
+      }else{
+        showResult(qr, ocrDisplay);
+      }
     }else if(cand && /\d/.test(cand) && /-/.test(cand) && cand.length>=10){
       /* OCR KHÔNG bám QR nhưng ra một mã trông "sạch" => nghi nhãn dán nhầm mã.
          Yêu cầu 2 lần chụp liên tiếp ra CÙNG mã mới kết luận lệch (chặn rác). */
