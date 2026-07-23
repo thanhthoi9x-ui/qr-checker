@@ -75,6 +75,8 @@
 
   .ocr-progress{position:absolute;top:12px;left:12px;z-index:3;background:rgba(10,12,16,.72);border:1px solid var(--stroke-strong);border-radius:10px;padding:6px 10px;font-size:11px;color:var(--blue);display:none;font-family:var(--mono);}
 
+  .zoom-range{position:absolute;left:16px;right:16px;bottom:78px;z-index:3;accent-color:var(--yellow);display:none;height:26px;width:calc(100% - 32px);}
+
   .cam-error{padding:18px;text-align:center;color:var(--muted);font-size:13px;line-height:1.6;}
   .link-btn{background:none;border:none;color:var(--yellow);font-size:13px;text-decoration:underline;padding:8px 2px;cursor:pointer;}
   .manual-zone{display:none;margin-top:10px;}
@@ -168,6 +170,7 @@
       <div id="fallback-reader"></div>
       <div class="frame-hint"><div class="box"></div></div>
       <button class="torch-btn" id="torchBtn" title="Đèn flash" style="display:none;">🔦</button>
+      <input type="range" class="zoom-range" id="zoomRange" title="Phóng to camera">
       <div class="ocr-progress" id="ocrProgress">Đang tải bộ đọc chữ…</div>
       <div class="chips">
         <div class="chip wait" id="chipQr">
@@ -275,6 +278,8 @@
   let historyLog=[];
   const STORAGE_KEY='qr-label-check-history';
   const snapCanvas=document.createElement('canvas');
+  const qrCanvas=document.createElement('canvas');
+  let jsqrBusy=false, qrScanTimer=null;
 
   // ═══════════ utils ═══════════
   function toast(msg,ms){
@@ -305,12 +310,14 @@
         if(fm&&fm.includes('qr_code')){detector=new window.BarcodeDetector({formats:['qr_code']});nativeOk=true;}
       }catch(e){}
     }
+    setupZoom();
     if(nativeOk){
       qrTimer=setInterval(qrTickNative,240);
     }else{
       await startFallbackQr();
     }
-    initOcr(); // load OCR engine in parallel
+    initJsQr(); // independent high-res QR decoder — catches small/far QR
+    initOcr();  // load OCR engine in parallel
   }
 
   async function qrTickNative(){
@@ -331,7 +338,8 @@
       await html5QrCode.start({facingMode:'environment'},{fps:8,qrbox:{width:250,height:250}},
         t=>{if(!paused&&!qrValue)onQr(t);},()=>{});
       usingFallback=true;
-      // grab the fallback's video element so OCR can snapshot it too
+      $('zoomRange').style.display='none'; // original stream stopped, slider no longer controls anything
+      // grab the fallback's video element so OCR + jsQR can snapshot it too
       const fv=document.querySelector('#fallback-reader video');
       if(fv) snapSource=fv;
     }catch(err){ showCameraError(err); }
@@ -358,6 +366,47 @@
       torchOn=!torchOn; torchBtn.classList.toggle('on',torchOn);
     }catch(e){ toast('Đèn flash không khả dụng'); }
   });
+
+  function setupZoom(){
+    const tr=stream&&stream.getVideoTracks?stream.getVideoTracks()[0]:null;
+    if(!tr||!tr.getCapabilities)return;
+    let caps={};try{caps=tr.getCapabilities();}catch(e){return;}
+    if(!caps.zoom||caps.zoom.max==null)return;
+    const z=$('zoomRange');
+    z.min=caps.zoom.min; z.max=caps.zoom.max; z.step=caps.zoom.step||0.1;
+    try{ z.value=(tr.getSettings&&tr.getSettings().zoom)||caps.zoom.min; }catch(e){ z.value=caps.zoom.min; }
+    z.style.display='block';
+    z.addEventListener('input',()=>{
+      tr.applyConstraints({advanced:[{zoom:parseFloat(z.value)}]}).catch(()=>{});
+    });
+  }
+
+  // ═══════════ independent QR decoder (jsQR on high-res frames) ═══════════
+  // BarcodeDetector / html5-qrcode can miss small QR codes at pallet distance;
+  // this path decodes from a larger snapshot so the QR is read even when small.
+  async function initJsQr(){
+    try{
+      if(!window.jsQR) await loadScript('https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js');
+      qrScanTimer=setInterval(jsqrTick,480);
+    }catch(e){ /* other QR paths still active */ }
+  }
+  function jsqrTick(){
+    if(paused||qrValue||jsqrBusy||!window.jsQR) return;
+    const src=snapSource;
+    if(!src||!src.videoWidth) return;
+    jsqrBusy=true;
+    try{
+      const scale=Math.min(1,1280/src.videoWidth);
+      qrCanvas.width=Math.round(src.videoWidth*scale);
+      qrCanvas.height=Math.round(src.videoHeight*scale);
+      const ctx=qrCanvas.getContext('2d',{willReadFrequently:true});
+      ctx.drawImage(src,0,0,qrCanvas.width,qrCanvas.height);
+      const img=ctx.getImageData(0,0,qrCanvas.width,qrCanvas.height);
+      const code=window.jsQR(img.data,img.width,img.height,{inversionAttempts:'dontInvert'});
+      if(code&&code.data&&code.data.trim()) onQr(code.data.trim());
+    }catch(e){}
+    jsqrBusy=false;
+  }
 
   // ═══════════ OCR engine (tesseract.js) ═══════════
   async function initOcr(){
