@@ -274,6 +274,7 @@
   let ocrConfirmed=null;            // confirmed ITEM NO from yellow label
   let ocrReads={};                  // read -> count (for stability voting)
   let ocrWorker=null, ocrBusy=false, ocrReady=false, ocrFailed=false;
+  let ocrAttempts=0, looseReads={}, looseLatest={};
   let lastResult=null;
   let historyLog=[];
   const STORAGE_KEY='qr-label-check-history';
@@ -440,6 +441,27 @@
     }
   }
 
+  // Grayscale + percentile contrast stretch: tames specular glare from the PE
+  // stretch film so character strokes stay consistent between frames.
+  function preprocessForOcr(ctx,w,h){
+    const img=ctx.getImageData(0,0,w,h);
+    const d=img.data, hist=new Uint32Array(256);
+    for(let i=0;i<d.length;i+=4){
+      const g=((d[i]*299+d[i+1]*587+d[i+2]*114)/1000)|0;
+      d[i]=d[i+1]=d[i+2]=g; hist[g]++;
+    }
+    const total=w*h; let lo=0,hi=255,acc=0;
+    for(let v=0;v<256;v++){acc+=hist[v];if(acc>=total*0.05){lo=v;break;}}
+    acc=0;
+    for(let v=255;v>=0;v--){acc+=hist[v];if(acc>=total*0.05){hi=v;break;}}
+    const range=Math.max(1,hi-lo);
+    for(let i=0;i<d.length;i+=4){
+      let g=(d[i]-lo)*255/range; g=g<0?0:(g>255?255:g);
+      d[i]=d[i+1]=d[i+2]=g;
+    }
+    ctx.putImageData(img,0,0);
+  }
+
   async function ocrTick(){
     if(paused||ocrBusy||!ocrReady||ocrConfirmed) return;
     const src=snapSource;
@@ -447,23 +469,31 @@
     ocrBusy=true;
     setChip(chipOcr,'busy',chipOcrVal,'Đang đọc chữ…');
     try{
-      // snapshot at ~1100px wide for speed/accuracy balance
-      const scale=Math.min(1,1100/src.videoWidth);
+      // snapshot at ~1200px wide, then de-glare preprocess
+      const scale=Math.min(1,1200/src.videoWidth);
       snapCanvas.width=Math.round(src.videoWidth*scale);
       snapCanvas.height=Math.round(src.videoHeight*scale);
-      const ctx=snapCanvas.getContext('2d');
+      const ctx=snapCanvas.getContext('2d',{willReadFrequently:true});
       ctx.drawImage(src,0,0,snapCanvas.width,snapCanvas.height);
+      preprocessForOcr(ctx,snapCanvas.width,snapCanvas.height);
       const res=await ocrWorker.recognize(snapCanvas);
       const token=extractItemNo(res&&res.data?res.data.text:'');
+      ocrAttempts++;
       if(token){
         ocrReads[token]=(ocrReads[token]||0)+1;
+        const lk=normLoose(token);
+        looseReads[lk]=(looseReads[lk]||0)+1;
+        looseLatest[lk]=token;
         // accept immediately if it matches the QR (strong mutual evidence);
-        // otherwise require the same read twice to avoid OCR false alarms
-        if(qrValue&&normLoose(token)===normLoose(qrValue)){ confirmOcr(token); }
-        else if(ocrReads[token]>=2){ confirmOcr(token); }
+        // otherwise two consistent reads (separator noise ignored) confirm it
+        if(qrValue&&lk===normLoose(qrValue)){ confirmOcr(token); }
+        else if(ocrReads[token]>=2||looseReads[lk]>=2){ confirmOcr(looseLatest[lk]); }
         else{ setChip(chipOcr,'busy',chipOcrVal,'Thấy: '+token+' — xác nhận lại…'); }
       }else{
         setChip(chipOcr,'wait',chipOcrVal,'Chưa thấy dòng ITEM NO…');
+        if(ocrAttempts>0&&ocrAttempts%6===0){
+          toast('💡 Bị lóa đèn trên màng bọc? Nghiêng máy ~15° hoặc đứng chếch khỏi hướng đèn — chỗ lóa trắng là OCR không đọc được.',4200);
+        }
       }
     }catch(e){
       setChip(chipOcr,'wait',chipOcrVal,'Đang đọc chữ…');
@@ -588,7 +618,7 @@
   rescanBtn.addEventListener('click',resetForNext);
   function resetForNext(){
     resultCard.style.display='none';
-    qrValue=null; ocrConfirmed=null; ocrReads={}; lastResult=null;
+    qrValue=null; ocrConfirmed=null; ocrReads={}; looseReads={}; looseLatest={}; ocrAttempts=0; lastResult=null;
     setChip(chipQr,'wait',chipQrVal,'Đang tìm…');
     setChip(chipOcr,ocrFailed?'wait':'wait',chipOcrVal,ocrFailed?'OCR lỗi — nhập tay':'Đang đọc chữ…');
     mQr.value=''; mYellow.value='';
