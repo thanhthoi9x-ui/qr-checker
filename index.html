@@ -114,7 +114,27 @@
 </div>
 
 <div class="scan-actions">
-  <button class="btn-gold" id="btnShot">📸 Chụp &amp; đối chiếu</button>
+  <button class="btn-gold" id="btnPhoto">📷 Chụp ảnh nét (khuyên dùng)</button>
+  <button class="btn-ghost" id="btnShot">📸 Quét trực tiếp</button>
+</div>
+<div class="scan-actions">
+  <button class="btn-gold" id="btnBatch">🗂 Đối chiếu HÀNG LOẠT (chọn nhiều ảnh)</button>
+</div>
+<input type="file" accept="image/*" capture="environment" id="photoInput" hidden>
+<input type="file" accept="image/*" multiple id="batchInput" hidden>
+
+<!-- KẾT QUẢ HÀNG LOẠT -->
+<div class="card" id="batchCard" style="display:none">
+  <div class="head">
+    <div class="icon">🗂</div>
+    <div><h2 id="batchTitle">ĐỐI CHIẾU HÀNG LOẠT</h2><p id="batchSub">—</p></div>
+  </div>
+  <input id="batchName" placeholder="Tên đợt (VD: Xuất 10 cont — 24/07)" style="width:100%;background:var(--panel2);border:1px solid var(--line);border-radius:14px;padding:14px;font-size:16px;color:var(--text);margin-bottom:12px">
+  <div id="batchRows"></div>
+  <div class="actions">
+    <button class="btn-ghost" id="btnBatchMore">➕ Thêm ảnh</button>
+    <button class="btn-gold" id="btnBatchSave">💾 Lưu cả đợt</button>
+  </div>
 </div>
 <label style="display:flex;align-items:center;gap:8px;margin-top:10px;padding:0 4px;font-size:15px;color:var(--muted)">
   <input type="checkbox" id="autoChk" checked style="width:20px;height:20px;accent-color:var(--gold)">
@@ -439,7 +459,7 @@ async function autoScan(){
         showResult(qr,ocrDisplay);
       }else{
         $("chipOCR").textContent=ocrDisplay+" (?)";
-        procMsg("warn","Tự động phát hiện khả năng lệch — bấm 📸 Chụp & đối chiếu để xác nhận (chống nhầm do OCR).");
+        procMsg("warn","Tự động phát hiện khả năng lệch — bấm 📸 Quét trực tiếp để xác nhận (chống nhầm do OCR).");
       }
     }
   }catch(e){}
@@ -597,8 +617,253 @@ $("btnShot").onclick=async ()=>{
     procMsg("warn","Lỗi khi đọc: "+e.message+". Thử lại hoặc dùng Nhập tay.");
   }finally{
     shotBusy=false;
-    $("btnShot").disabled=false; $("btnShot").textContent="📸 Chụp & đối chiếu";
+    $("btnShot").disabled=false; $("btnShot").textContent="📸 Quét trực tiếp";
   }
+};
+
+/* ── 8. CHẾ ĐỘ CHỤP ẢNH (khuyên dùng): ảnh camera gốc nét hơn hẳn luồng video
+   => OCR chính xác hơn. Một tấm chụp cả 2 nhãn: đọc luôn QR + ITEM NO từ ảnh. ── */
+async function loadBitmap(file){
+  if(window.createImageBitmap){
+    try{ return await createImageBitmap(file,{imageOrientation:"from-image"}); }
+    catch(_){ try{ return await createImageBitmap(file); }catch(__){} }
+  }
+  return await new Promise((res,rej)=>{
+    const img=new Image();
+    img.onload=()=>res(img); img.onerror=rej;
+    img.src=URL.createObjectURL(file);
+  });
+}
+function photoCanvas(bmp, maxW, binarize){
+  const bw=bmp.width||bmp.naturalWidth, bh=bmp.height||bmp.naturalHeight;
+  const scale=Math.min(1, maxW/bw);
+  const c=document.createElement("canvas");
+  c.width=Math.round(bw*scale); c.height=Math.round(bh*scale);
+  const g=c.getContext("2d"); g.imageSmoothingEnabled=true;
+  g.drawImage(bmp,0,0,c.width,c.height);
+  if(binarize!==undefined){
+    const img=g.getImageData(0,0,c.width,c.height), d=img.data;
+    const hist=new Array(256).fill(0), gray=new Uint8Array(d.length/4);
+    for(let i=0,j=0;i<d.length;i+=4,j++){
+      const v=(d[i]*.3+d[i+1]*.59+d[i+2]*.11)|0; gray[j]=v; hist[v]++;
+    }
+    const th=binarize?otsu(hist,gray.length):-1;
+    for(let i=0,j=0;i<d.length;i+=4,j++){
+      const t=binarize?(gray[j]>th?255:0):gray[j];
+      d[i]=d[i+1]=d[i+2]=t;
+    }
+    g.putImageData(img,0,0);
+  }
+  return c;
+}
+function qrFromCanvas(c){
+  if(typeof jsQR==="undefined") return null;
+  try{
+    const g=c.getContext("2d");
+    const img=g.getImageData(0,0,c.width,c.height);
+    const code=jsQR(img.data,img.width,img.height,{inversionAttempts:"attemptBoth"});
+    return (code&&code.data&&code.data.trim())||null;
+  }catch(e){ return null; }
+}
+async function processPhoto(file){
+  if(!ocrWorker){procMsg("warn","OCR chưa tải xong (xem trạng thái đầu trang). Chờ dấu ✓ rồi thử lại.");return;}
+  shotBusy=true;
+  for(let i=0;i<40&&autoBusy;i++) await new Promise(r=>setTimeout(r,100));
+  $("btnPhoto").disabled=$("btnShot").disabled=true;
+  procMsg("info","Đang xử lý ảnh chụp…");
+  try{
+    const bmp=await loadBitmap(file);
+    /* QR: thử giải mã từ chính tấm ảnh ở 2 cỡ; không có thì dùng QR đã khóa */
+    let qr=qrFromCanvas(photoCanvas(bmp,1600))||qrFromCanvas(photoCanvas(bmp,900))||qrLive;
+    if(!qr){
+      procMsg("warn","Không thấy mã QR trong ảnh và cũng chưa quét QR trước đó. Chụp lại sao cho thấy cả QR nhãn trắng, hoặc quét QR trực tiếp trước.");
+      return;
+    }
+    qrLive=qr; qrSeenAt=Date.now();
+    $("chipQR").textContent=qr; $("dotQR").className="dot on"; updateStep();
+
+    /* OCR trên ảnh chụp (cap 1400px): Otsu trước, chưa đạt mới chạy bản xám */
+    const qc=normCore(qr);
+    let best={rel:Infinity,text:"",sub:""};
+    for(const bin of [true,false]){
+      const {data}=await ocrWorker.recognize(photoCanvas(bmp,1400,bin));
+      const raw=data.text||"";
+      const f=fuzzyFind(qc, normCore(raw));
+      const rel=f.dist/Math.max(qc.length,1);
+      if(rel<best.rel) best={rel,text:raw,sub:f.sub};
+      if(best.rel<=0.25) break;
+    }
+    const cand=extractItemNo(best.text);
+    if(best.rel<=0.25){
+      let ocrDisplay=best.sub;
+      if(cand && fuzzyFind(qc,normCore(cand)).dist<=best.rel*qc.length+1) ocrDisplay=cand;
+      $("chipOCR").textContent=ocrDisplay; $("dotOCR").className="dot on";
+      const d=Math.round(best.rel*qc.length);
+      const r0=compareLabels(qr,ocrDisplay);
+      if(r0.verdict==="MISMATCH" && d<=2){
+        showResult(qr,ocrDisplay,null,{verdict:"MATCH_LOOSE",title:"Gần khớp — xác nhận mắt",
+          note:`GẦN KHỚP: lệch ${d} ký tự — khả năng cao là OCR đọc sai. Nhìn nhãn thật để xác nhận rồi sửa ghi chú nếu cần. QR: "${qr}" | OCR: "${ocrDisplay}".`});
+      }else{
+        showResult(qr, ocrDisplay);
+      }
+    }else if(cand && /\d/.test(cand) && /-/.test(cand) && cand.length>=10){
+      if(lastShotCand && normCore(cand)===normCore(lastShotCand)){
+        $("chipOCR").textContent=cand; $("dotOCR").className="dot on";
+        showResult(qr, cand, "(Đã xác nhận qua 2 tấm ảnh ra cùng một mã.)");
+      }else{
+        lastShotCand=cand;
+        $("chipOCR").textContent=cand+" (?)";
+        procMsg("warn",`Đọc ra mã "${cand}" — KHÁC hẳn mã QR. Chụp thêm 1 tấm nữa; nếu vẫn ra đúng mã này, tool sẽ kết luận lệch.`);
+      }
+    }else{
+      lastShotCand=null;
+      $("chipOCR").textContent="Chưa rõ";
+      procMsg("warn","Ảnh chưa đọc rõ ITEM NO. Chụp lại: gần hơn, thẳng góc, đủ sáng, chữ ITEM NO chiếm phần lớn khung.");
+    }
+  }catch(e){
+    console.warn(e);
+    procMsg("warn","Lỗi xử lý ảnh: "+e.message+". Thử chụp lại hoặc dùng Nhập tay.");
+  }finally{
+    shotBusy=false;
+    $("btnPhoto").disabled=$("btnShot").disabled=false;
+  }
+}
+$("btnPhoto").onclick=()=>$("photoInput").click();
+$("photoInput").onchange=async e=>{
+  const f=e.target.files&&e.target.files[0];
+  e.target.value="";
+  if(f) await processPhoto(f);
+};
+
+/* ── 9. ĐỐI CHIẾU HÀNG LOẠT: chụp sẵn tất cả nhãn ngoài bãi bằng app Camera,
+   về chọn nhiều ảnh một lượt — tool xử lý tuần tự từng tấm, ra bảng tổng kết đợt.
+   Mỗi tấm tự chứa đủ thông tin: QR giải mã từ chính tấm đó + OCR ITEM NO. ── */
+let batchItems=[];
+
+async function analyzePhoto(file){
+  /* Trả kết quả 1 tấm, KHÔNG đụng UI chung. */
+  const out={file:file.name||"", qr:null, ocr:null, verdict:"UNREADABLE",
+             title:"Không đọc được", note:""};
+  let bmp=null;
+  try{
+    bmp=await loadBitmap(file);
+    out.qr = qrFromCanvas(photoCanvas(bmp,1600)) || qrFromCanvas(photoCanvas(bmp,900));
+    if(!out.qr){
+      out.verdict="NO_QR"; out.title="Thiếu QR";
+      out.note="Không giải mã được QR trong ảnh — chụp lại tấm này, lấy rõ nhãn trắng.";
+      return out;
+    }
+    const qc=normCore(out.qr);
+    let best={rel:Infinity,text:"",sub:""};
+    for(const bin of [true,false]){
+      const {data}=await ocrWorker.recognize(photoCanvas(bmp,1400,bin));
+      const raw=data.text||"";
+      const f=fuzzyFind(qc, normCore(raw));
+      const rel=f.dist/Math.max(qc.length,1);
+      if(rel<best.rel) best={rel,text:raw,sub:f.sub};
+      if(best.rel<=0.25) break;
+    }
+    const cand=extractItemNo(best.text);
+    if(best.rel<=0.25){
+      let ocrDisplay=best.sub;
+      if(cand && fuzzyFind(qc,normCore(cand)).dist<=best.rel*qc.length+1) ocrDisplay=cand;
+      out.ocr=ocrDisplay;
+      const d=Math.round(best.rel*qc.length);
+      const r=compareLabels(out.qr,ocrDisplay);
+      if(r.verdict==="MISMATCH" && d<=2){
+        out.verdict="REVIEW"; out.title="Gần khớp — xem mắt";
+        out.note=`Lệch ${d} ký tự — khả năng cao OCR đọc sai; đối chiếu mắt với ảnh gốc.`;
+      }else{
+        out.verdict=r.verdict; out.title=r.title; out.note=r.note;
+      }
+    }else if(cand && /\d/.test(cand) && /-/.test(cand) && cand.length>=10){
+      out.ocr=cand;
+      out.verdict="MISMATCH"; out.title="Nghi lệch — kiểm tay";
+      out.note=`OCR đọc ra mã "${cand}" khác hẳn QR "${out.qr}". Kiểm tra kiện này bằng mắt / chụp lại để xác nhận.`;
+    }else{
+      out.note="OCR chưa đọc rõ ITEM NO — chụp lại tấm này: gần hơn, thẳng góc, đủ sáng.";
+    }
+    return out;
+  }catch(e){
+    out.note="Lỗi xử lý ảnh: "+e.message;
+    return out;
+  }finally{
+    if(bmp&&bmp.close) try{bmp.close();}catch(_){}
+  }
+}
+
+const BATCH_TAG={
+  MATCH:["t-MATCH","Khớp"], MATCH_FORMAT_ONLY:["t-MATCH_FORMAT_ONLY","Khớp nội dung"],
+  MATCH_LOOSE:["t-MATCH_LOOSE","Gần khớp"], REVIEW:["t-MATCH_LOOSE","Xem mắt"],
+  MISMATCH:["t-MISMATCH","Nghi lệch"], NO_QR:["t-MISMATCH","Thiếu QR"],
+  UNREADABLE:["t-MISMATCH","Chụp lại"],
+};
+function renderBatch(processing,total){
+  const okN=batchItems.filter(x=>x.verdict==="MATCH"||x.verdict==="MATCH_FORMAT_ONLY").length;
+  const eyeN=batchItems.filter(x=>x.verdict==="MATCH_LOOSE"||x.verdict==="REVIEW").length;
+  const badN=batchItems.length-okN-eyeN;
+  $("batchSub").textContent = processing
+    ? `Đang xử lý ${processing}/${total}…`
+    : `${batchItems.length} ảnh — ${okN} khớp · ${eyeN} xem mắt · ${badN} cần xử lý`;
+  $("batchRows").innerHTML = batchItems.map((x,i)=>{
+    const [cls,short]=BATCH_TAG[x.verdict]||BATCH_TAG.UNREADABLE;
+    return `<div class="hist-item">
+      <span class="t">#${i+1}${x.file?" · "+x.file.replace(/</g,"&lt;"):""}</span>
+      <span class="tag ${cls}">${short}</span>
+      <div class="mono">QR: ${x.qr?x.qr.replace(/</g,"&lt;"):"—"}</div>
+      <div class="mono">OCR: ${x.ocr?x.ocr.replace(/</g,"&lt;"):"—"}</div>
+      <div style="color:var(--muted);margin-top:4px;font-size:13px">${(x.note||"").replace(/</g,"&lt;")}</div>
+    </div>`;
+  }).join("");
+  $("batchCard").style.display="block";
+}
+
+async function processBatch(files){
+  if(!ocrWorker){procMsg("warn","OCR chưa tải xong (xem trạng thái đầu trang). Chờ dấu ✓ rồi thử lại.");return;}
+  if(!files.length) return;
+  shotBusy=true;
+  for(let i=0;i<40&&autoBusy;i++) await new Promise(r=>setTimeout(r,100));
+  $("btnBatch").disabled=$("btnPhoto").disabled=$("btnShot").disabled=true;
+  const startIdx=batchItems.length;
+  try{
+    for(let i=0;i<files.length;i++){
+      renderBatch(startIdx+i+1, startIdx+files.length);
+      $("batchCard").scrollIntoView({behavior:"smooth",block:"nearest"});
+      const r=await analyzePhoto(files[i]);
+      batchItems.push(r);
+      renderBatch(i+1<files.length ? startIdx+i+2 : null, startIdx+files.length);
+    }
+    renderBatch(null,0);
+  }finally{
+    shotBusy=false;
+    $("btnBatch").disabled=$("btnPhoto").disabled=$("btnShot").disabled=false;
+  }
+}
+
+$("btnBatch").onclick=()=>{ $("batchInput").click(); };
+$("btnBatchMore").onclick=()=>{ $("batchInput").click(); };
+$("batchInput").onchange=async e=>{
+  const fs=Array.from(e.target.files||[]);
+  e.target.value="";
+  if(fs.length) await processBatch(fs);
+};
+$("btnBatchSave").onclick=()=>{
+  if(!batchItems.length) return;
+  const name=($("batchName").value||"").trim()||("Đợt "+new Date().toLocaleString("vi-VN"));
+  const h=loadHist();
+  for(const x of [...batchItems].reverse()){
+    h.unshift({
+      qr:x.qr||"—", ocr:x.ocr||"—",
+      verdict:(x.verdict in BATCH_TAG && x.verdict.startsWith("MATCH"))||x.verdict==="MISMATCH" ? x.verdict :
+              (x.verdict==="REVIEW"?"MATCH_LOOSE":"MISMATCH"),
+      title:x.title, note:x.note, userNote:"["+name+"] "+(x.note||""),
+      at:new Date().toISOString(),
+    });
+  }
+  localStorage.setItem(KEY,JSON.stringify(h.slice(0,300)));
+  renderHist();
+  batchItems=[]; $("batchCard").style.display="none"; $("batchName").value="";
+  procMsg("info","Đã lưu cả đợt vào lịch sử.");
 };
 
 renderHist();
