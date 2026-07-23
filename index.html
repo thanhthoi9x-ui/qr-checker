@@ -114,6 +114,10 @@
 <div class="scan-actions">
   <button class="btn-gold" id="btnShot">📸 Chụp &amp; đối chiếu</button>
 </div>
+<label style="display:flex;align-items:center;gap:8px;margin-top:10px;padding:0 4px;font-size:15px;color:var(--muted)">
+  <input type="checkbox" id="autoChk" checked style="width:20px;height:20px;accent-color:var(--gold)">
+  Tự động đối chiếu khi thấy QR (chỉ tự chốt khi KHỚP; nghi lệch sẽ yêu cầu bấm 📸)
+</label>
 <div class="proc-msg" id="procMsg"></div>
 <a class="manual-link" href="#" id="manualLink">Nhập tay (khi camera / OCR không dùng được)</a>
 
@@ -192,7 +196,13 @@ const libOCR = loadScript([
   "https://unpkg.com/tesseract.js@5.1.1/dist/tesseract.min.js",
 ]).then(async ()=>{
     $("sysOCR").textContent="tải model…";
-    ocrWorker = await Tesseract.createWorker("eng");
+    /* Model "best" (LSTM chất lượng cao) — chính xác hơn model fast mặc định;
+       đổi lại tải lần đầu nặng hơn (~12MB, có cache) và đọc chậm hơn chút */
+    try{
+      ocrWorker = await Tesseract.createWorker("eng", 1, {langPath:"https://tessdata.projectnaptha.com/4.0.0_best"});
+    }catch(_){
+      ocrWorker = await Tesseract.createWorker("eng"); /* dự phòng model mặc định */
+    }
     await ocrWorker.setParameters({
       tessedit_char_whitelist:"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789()-.:/ ",
       tessedit_pageseg_mode:"6",
@@ -216,6 +226,11 @@ function compareLabels(qrText, ocrText){
     note:"Khớp tuyệt đối (QR = OCR)."};
   if(normCore(qr)===normCore(ocr)) return {verdict:"MATCH_FORMAT_ONLY",corrected:qr,title:"Khớp nội dung",
     note:`KHỚP nội dung. Chênh lệch chỉ ở dấu phân cách (-, khoảng trắng) — nguyên nhân: OCR bỏ sót nét mảnh, không phải nhãn in sai. Đã phục hồi theo QR: "${qr}".`};
+  const a=normCore(qr), b=normCore(ocr);
+  if(b.includes(a)) return {verdict:"MATCH_FORMAT_ONLY",corrected:qr,title:"Khớp nội dung",
+    note:`KHỚP nội dung. OCR đọc dư vài ký tự nhiễu ở biên (thường do dính chữ nhỏ in cạnh nhãn) — không phải nhãn in sai. Đã phục hồi theo QR: "${qr}".`};
+  if(a.includes(b) && a.length-b.length<=2 && b.length>=8) return {verdict:"MATCH_LOOSE",corrected:qr,title:"Gần khớp — xác nhận mắt",
+    note:`GẦN KHỚP: OCR đọc thiếu ${a.length-b.length} ký tự ở biên — khả năng cao là lỗi đọc, xác nhận nhanh bằng mắt. QR: "${qr}" | OCR: "${ocr}".`};
   if(normLoose(qr)===normLoose(ocr)) return {verdict:"MATCH_LOOSE",corrected:qr,title:"Gần khớp — xác nhận mắt",
     note:`GẦN KHỚP: lệch ở ký tự OCR dễ nhầm (0/O, 1/I, 5/S, 8/B…). Khả năng cao là lỗi đọc OCR — xác nhận nhanh bằng mắt trước khi lưu. QR: "${qr}" | OCR: "${ocr}".`};
   return {verdict:"MISMATCH",corrected:null,title:"Lệch nội dung",
@@ -267,7 +282,10 @@ function extractItemNo(rawText){
       while(j<lines.length){
         const nxt=lines[j].replace(/\s+/g,"");
         const looksCode = CODEPART_RE.test(nxt) && !KEYWORDS_RE.test(lines[j]);
-        if((code.endsWith("-")||code.length<8||(!code.includes("(")&&nxt.includes("("))) && looksCode){ code+=nxt; j++; }
+        /* Ghép tham lam có chặn: mã có thể wrap 2, 3, 4 dòng — cứ ghép tiếp
+           miễn dòng sau trông như mảnh mã và chưa gặp keyword (ITEM:/SIZE:/QTY…).
+           Ghép dư vài ký tự nhiễu không sao — quy tắc "rác ở biên" sẽ tha thứ. */
+        if(looksCode && code.length<40){ code+=nxt; j++; }
         else break;
       }
       if(code.length>=6) return code;
@@ -387,6 +405,39 @@ function scanQRFrame(){
   return null;
 }
 
+let autoBusy=false, lastAutoAt=0, shotBusy=false;
+const AUTO_MS=3000;
+
+/* Tự động: OCR nền khi có QR mới thấy; CHỈ tự chốt khi kết luận thuộc nhóm
+   khớp (đã qua thẩm định). Nghi lệch / chưa rõ => nhắc bấm 📸 xác nhận. */
+async function autoScan(){
+  if(autoBusy||shotBusy||!ocrWorker||current) return;
+  if(!qrLive||Date.now()-qrSeenAt>QR_FRESH_MS) return;
+  autoBusy=true;
+  try{
+    const qr=qrLive, qc=normCore(qr);
+    const {data}=await ocrWorker.recognize(makeOcrCanvas(true));
+    if(current||!qrLive){return;}          // trạng thái đổi trong lúc đọc => bỏ
+    const raw=data.text||"";
+    const f=fuzzyFind(qc, normCore(raw));
+    const rel=f.dist/Math.max(qc.length,1);
+    if(rel<=0.25){
+      const cand=extractItemNo(raw);
+      let ocrDisplay=f.sub;
+      if(cand && fuzzyFind(qc,normCore(cand)).dist<=rel*qc.length+2) ocrDisplay=cand;
+      const r=compareLabels(qr,ocrDisplay);
+      if(r.verdict==="MATCH"||r.verdict==="MATCH_FORMAT_ONLY"){
+        $("chipOCR").textContent=ocrDisplay; $("dotOCR").className="dot on";
+        showResult(qr,ocrDisplay);
+      }else{
+        $("chipOCR").textContent=ocrDisplay+" (?)";
+        procMsg("warn","Tự động phát hiện khả năng lệch — bấm 📸 Chụp & đối chiếu để xác nhận (chống nhầm do OCR).");
+      }
+    }
+  }catch(e){}
+  finally{ autoBusy=false; }
+}
+
 function loop(){
   if(video.readyState>=2){
     frameNo++;
@@ -399,6 +450,9 @@ function loop(){
         // QR đã rời khung quá lâu => hết hiệu lực (chống "kết quả ma")
         qrLive=null;
         $("chipQR").textContent="Đang chờ…"; $("dotQR").className="dot";
+      }
+      if($("autoChk").checked && Date.now()-lastAutoAt>AUTO_MS){
+        lastAutoAt=Date.now(); autoScan();
       }
     }catch(e){}
   }
@@ -444,6 +498,7 @@ $("btnShot").onclick=async ()=>{
   if(video.readyState<2){procMsg("warn","Camera chưa sẵn sàng.");return;}
   if(!ocrWorker){procMsg("warn","OCR chưa tải xong (xem trạng thái đầu trang). Chờ dấu ✓ rồi thử lại, hoặc dùng Nhập tay.");return;}
 
+  shotBusy=true;
   $("btnShot").disabled=true; $("btnShot").textContent="Đang đọc…";
   $("chipOCR").textContent="Đang đọc…"; $("dotOCR").className="dot";
   procMsg("info","Đang đọc nhãn từ khung hình hiện tại…");
@@ -500,6 +555,7 @@ $("btnShot").onclick=async ()=>{
     console.warn(e);
     procMsg("warn","Lỗi khi đọc: "+e.message+". Thử lại hoặc dùng Nhập tay.");
   }finally{
+    shotBusy=false;
     $("btnShot").disabled=false; $("btnShot").textContent="📸 Chụp & đối chiếu";
   }
 };
