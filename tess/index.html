@@ -50,6 +50,7 @@
 <header>
   <h1>✅ Kiểm tra nhãn — Tesseract</h1>
   <div class="pill" id="engine">Đang chuẩn bị…</div>
+  <div class="pill" id="offline"></div>
 </header>
 <main>
   <input type="file" id="cam" accept="image/*" capture="environment" multiple>
@@ -10451,7 +10452,23 @@ function rotateToCanvas(src,deg,scale){const r=((deg%360)+360)%360,sw=src.width,
   if(Math.abs(s-1)>0.01){const c2=document.createElement('canvas');c2.width=c.width*s|0;c2.height=c.height*s|0;
     const x=c2.getContext('2d');x.imageSmoothingQuality='high';x.drawImage(c,0,0,c2.width,c2.height);out=c2;}
   return out;}
-if('serviceWorker' in navigator){ navigator.serviceWorker.register('./sw.js').catch(()=>{}); }
+
+if('serviceWorker' in navigator){
+  navigator.serviceWorker.register('./sw.js').catch(()=>{});
+  if(navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(()=>{});
+  const EXPECT=9, CACHE='qr-tess-v2', el=document.getElementById('offline');
+  let iv=null;
+  const tick=async()=>{
+    try{
+      const ks=await caches.keys();
+      if(!ks.includes(CACHE)){ el.textContent='⏳ Đang chuẩn bị bản offline…'; return; }
+      const n=(await (await caches.open(CACHE)).keys()).length;
+      if(n>=EXPECT){ el.textContent='✅ ĐÃ SẴN SÀNG DÙNG OFFLINE — có thể tắt mạng'; el.style.color='#22c55e'; el.style.fontWeight='800'; if(iv)clearInterval(iv); }
+      else { el.textContent='⏳ Đang tải để dùng offline… '+n+'/'+EXPECT+' (giữ mạng, đừng đóng trang)'; el.style.color='#f59e0b'; }
+    }catch(e){}
+  };
+  iv=setInterval(tick,1500); tick();
+}
 </script>
 </body>
 </html>
