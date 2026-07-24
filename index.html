@@ -99,6 +99,29 @@
   <span>QR: <b id="sysQR" class="load">đang tải…</b></span>
   <span>OCR: <b id="sysOCR" class="load">đang tải…</b></span>
   <span>Camera: <b id="sysCam" class="load">…</b></span>
+  <span>Engine: <b id="sysEngine">Tesseract</b></span>
+  <a href="#" id="cfgToggle" style="color:var(--gold);margin-left:auto">⚙︎ Cài đặt OCR</a>
+</div>
+
+<!-- CÀI ĐẶT ENGINE OCR -->
+<div id="cfgBox" style="display:none;border:1px solid var(--line);border-radius:22px;background:var(--panel);padding:18px;margin-bottom:14px">
+  <div style="font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);margin-bottom:10px">Bộ đọc chữ (OCR)</div>
+  <label style="display:block;margin-bottom:10px"><input type="radio" name="eng" value="tesseract" style="accent-color:var(--gold)"> <b>Tesseract</b> — chạy ngay trong trình duyệt, mọi máy (iPhone &amp; Android), không cần cài gì</label>
+  <label style="display:block;margin-bottom:10px"><input type="radio" name="eng" value="vision" style="accent-color:var(--gold)"> <b>OCR Server (Apple Vision)</b> — dùng 1 iPhone làm máy chủ OCR trong mạng LAN, chính xác hơn nhiều</label>
+  <label style="display:block;margin-bottom:14px"><input type="radio" name="eng" value="auto" style="accent-color:var(--gold)"> <b>Tự động</b> — ưu tiên OCR Server, mất kết nối thì tự quay về Tesseract</label>
+
+  <label style="display:block;font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);margin-bottom:6px">Địa chỉ OCR Server</label>
+  <input id="cfgUrl" placeholder="http://192.168.1.25:8000" style="width:100%;background:var(--panel2);border:1px solid var(--line);border-radius:14px;padding:14px;font-size:16px;color:var(--text)">
+  <div style="display:flex;gap:10px;margin-top:12px">
+    <button class="btn-ghost" id="cfgTest">Kiểm tra kết nối</button>
+    <button class="btn-gold" id="cfgSave">Lưu cài đặt</button>
+  </div>
+  <div id="cfgMsg" style="margin-top:12px;font-size:14px;line-height:1.45;color:var(--muted)"></div>
+  <div style="margin-top:14px;font-size:13px;color:var(--muted);line-height:1.5;border-top:1px solid var(--line);padding-top:12px">
+    Cách dựng máy chủ: cài app <b>OCR Server</b> (mã nguồn mở riddleling/iOS-OCR-Server) lên một iPhone cũ, mở app,
+    bật <b>Guided Access</b> + giữ màn hình sáng, rồi điền IP mà app hiển thị vào ô trên (cổng 8000).
+    Máy chủ chạy hoàn toàn offline, ảnh không rời khỏi mạng nội bộ.
+  </div>
 </div>
 
 <div class="cam-wrap">
@@ -208,12 +231,18 @@ function loadScript(urls){
   });
 }
 let ocrWorker=null;
+/* Nếu người dùng chọn CHỈ dùng OCR Server (Apple Vision) thì không tải
+   Tesseract nữa — tiết kiệm ~12MB dữ liệu và thời gian khởi động. */
+let CFG_PRELOAD={engine:"tesseract"};
+try{ Object.assign(CFG_PRELOAD, JSON.parse(localStorage.getItem("ocr-engine-cfg")||"{}")); }catch(e){}
 const libQR = loadScript([
   "https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js",
   "https://unpkg.com/jsqr@1.4.0/dist/jsQR.js",
 ]).then(()=>{ $("sysQR").textContent="✓"; $("sysQR").className="ok"; return true; })
   .catch(()=>{ $("sysQR").textContent="lỗi tải"; $("sysQR").className="bad"; return false; });
-const libOCR = loadScript([
+const libOCR = (CFG_PRELOAD.engine==="vision"
+  ? Promise.resolve(($("sysOCR").textContent="bỏ qua (dùng Vision)", $("sysOCR").className="ok", true))
+  : loadScript([
   "https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js",
   "https://unpkg.com/tesseract.js@5.1.1/dist/tesseract.min.js",
 ]).then(async ()=>{
@@ -230,7 +259,7 @@ const libOCR = loadScript([
     $("sysOCR").textContent="✓"; $("sysOCR").className="ok";
     return true;
   })
-  .catch(e=>{ console.warn(e); $("sysOCR").textContent="lỗi tải"; $("sysOCR").className="bad"; return false; });
+  .catch(e=>{ console.warn(e); $("sysOCR").textContent="lỗi tải"; $("sysOCR").className="bad"; return false; }));
 
 /* ── 1. Lõi đối chiếu ── */
 const SEP_RE = /[-–—_.\s]/g;
@@ -257,6 +286,7 @@ function compareLabels(qrText, ocrText){
 }
 
 function diffHTML(a,b){
+  a=(a==null?"":String(a)); b=(b==null?"":String(b));
   let p=0; while(p<a.length&&p<b.length&&a[p]===b[p]) p++;
   let s=0; while(s<a.length-p&&s<b.length-p&&a[a.length-1-s]===b[b.length-1-s]) s++;
   const esc=t=>t.replace(/&/g,"&amp;").replace(/</g,"&lt;");
@@ -288,6 +318,59 @@ function fuzzyFind(pattern, text){
   return {dist:best,sub:text.slice(sPrev[bj],bj)};
 }
 
+/* ── 2b. GIẢI QUYẾT CA MẬP MỜ BẰNG ĐỒNG THUẬN NHIỀU LƯỢT ĐỌC ──
+   LỖI CŨ (v6) rất nguy hiểm: mọi chênh lệch 1-2 ký tự đều bị HẠ xuống
+   "gần khớp" màu vàng. Nhưng nhãn dán nhầm THẬT ngoài kho thường chỉ khác
+   đúng 1 ký tự (42 vs 48, Y1023 vs Y1024, BN vs BR) — tức là tool đang bỏ sót
+   đúng thứ nó sinh ra để bắt.
+   NGUYÊN TẮC MỚI: lệch 1-2 ký tự = CHƯA KẾT LUẬN ĐƯỢC, phải đọc lại nhiều lượt:
+     • các lượt đọc ra CÙNG một mã khác QR  => LỆCH THẬT (đỏ)
+     • các lượt đọc mâu thuẫn nhau          => nhiễu OCR, yêu cầu xác nhận mắt (vàng)
+   Không bao giờ tự chốt "khớp" cho ca lệch ký tự. */
+function readsToCandidates(qr, reads){
+  const qc=normCore(qr), out=[];
+  for(const raw of reads){
+    if(!raw) continue;
+    const f=fuzzyFind(qc, normCore(raw));
+    const cand=extractItemNo(raw);
+    let disp=cand||f.sub;
+    /* ưu tiên bản trích có dấu phân cách; nếu nó lệch xa hơn thì dùng f.sub */
+    if(cand && fuzzyFind(qc,normCore(cand)).dist > f.dist+2) disp=f.sub;
+    out.push({disp, dist:fuzzyFind(qc,normCore(disp)).dist, rel:f.dist/Math.max(qc.length,1)});
+  }
+  return out;
+}
+function resolveVerdict(qr, reads){
+  const qc=normCore(qr);
+  const cands=readsToCandidates(qr, reads).filter(c=>c.disp&&c.disp.length>=6);
+  if(!cands.length) return {kind:"UNREADABLE"};
+  cands.sort((a,b)=>a.dist-b.dist);
+  const best=cands[0];
+  if(best.rel>0.25 && best.dist>2){
+    /* Không bám QR: có thể là mã hoàn toàn khác (dán nhầm) hoặc chỉ là rác.
+       Chỉ coi là "nghi dán nhầm" khi chuỗi TRÔNG NHƯ MỘT MÃ HÀNG HOÀN CHỈNH:
+         • có ngoặc hoặc cụm ≥2 chữ số liền (mã thật luôn có: 42, (Y1023)…)
+         • KHÔNG phải là một mảnh cắt ra từ chính mã QR (đọc cụt => chụp lại) */
+    const clean=cands.filter(c=>{
+      const n=normCore(c.disp);
+      if(!(/\d/.test(c.disp)&&/-/.test(c.disp)&&c.disp.length>=10)) return false;
+      if(!/\(|\d{2,}/.test(c.disp)) return false;      // rác không có dạng mã
+      if(qc.includes(n)||n.includes(qc)) return false; // đọc cụt/thừa của chính mã QR
+      return true;
+    });
+    if(clean.length>=2 && normCore(clean[0].disp)===normCore(clean[1].disp))
+      return {kind:"MISMATCH_CONFIRMED", ocr:clean[0].disp};
+    if(clean.length) return {kind:"SUSPECT", ocr:clean[0].disp};
+    return {kind:"UNREADABLE"};
+  }
+  const r=compareLabels(qr, best.disp);
+  if(r.verdict!=="MISMATCH") return {kind:"OK", ocr:best.disp, res:r};
+  /* Lệch 1-2 ký tự => cần đồng thuận */
+  const same=cands.filter(c=>normCore(c.disp)===normCore(best.disp)).length;
+  if(same>=2) return {kind:"MISMATCH_CONFIRMED", ocr:best.disp, dist:best.dist};
+  return {kind:"AMBIGUOUS", ocr:best.disp, dist:best.dist};
+}
+
 /* ── 3. Trích Item No dạng "đẹp" từ text OCR (ghép dòng bị wrap) ── */
 const KEYWORDS_RE = /^(TO|P\.?O\.?\s*NO|ITEM(?!\s*NO)|SIZE|QTY|MADE)/i;
 const CODEPART_RE = /^[A-Z0-9()\-]{2,}$/;
@@ -301,10 +384,12 @@ function extractItemNo(rawText){
       while(j<lines.length){
         const nxt=lines[j].replace(/\s+/g,"");
         const looksCode = CODEPART_RE.test(nxt) && !KEYWORDS_RE.test(lines[j]);
-        /* Ghép tham lam có chặn: mã có thể wrap 2, 3, 4 dòng — cứ ghép tiếp
-           miễn dòng sau trông như mảnh mã và chưa gặp keyword (ITEM:/SIZE:/QTY…).
-           Ghép dư vài ký tự nhiễu không sao — quy tắc "rác ở biên" sẽ tha thứ. */
-        if(looksCode && code.length<40){ code+=nxt; j++; }
+        /* Ghép dòng bị wrap (mã có thể xuống 2-4 dòng) NHƯNG dừng khi mã đã
+           trông hoàn chỉnh — nếu không sẽ nuốt luôn số P.O và size ở dòng dưới
+           (lỗi thật: "PR-LEPT-42-PC(Y1023)-BNJRV26133D42"). Mã coi là hoàn chỉnh
+           khi đã có ngoặc đóng ")" và không kết thúc bằng dấu nối. */
+        const complete = code.includes(")") && !/[-(]$/.test(code) && code.length>=12;
+        if(looksCode && !complete && code.length<40){ code+=nxt; j++; }
         else break;
       }
       if(code.length>=6) return code;
@@ -323,6 +408,130 @@ function extractItemNo(rawText){
   cands.sort((a,b)=>b.length-a.length);
   return cands[0]||null;
 }
+
+/* ══════════ ENGINE OCR: Tesseract (mọi máy) hoặc OCR Server Apple Vision ══════════
+   OCR Server = app mã nguồn mở chạy trên 1 iPhone cũ, mở REST API trong mạng LAN:
+     POST http://<IP>:8000/upload   (multipart, field "file", Accept: application/json)
+     → { success, ocr_result:"dòng1\ndòng2", image_width, image_height, ocr_boxes:[…] }
+   Vision đọc chữ in chính xác hơn Tesseract rõ rệt. Tesseract vẫn giữ nguyên làm
+   mặc định để máy Android / khi không có server vẫn dùng được bình thường. */
+const CFG_KEY="ocr-engine-cfg";
+let CFG={engine:"tesseract", url:""};
+try{ Object.assign(CFG, JSON.parse(localStorage.getItem(CFG_KEY)||"{}")); }catch(e){}
+let visionOK=null;   // null = chưa kiểm tra, true/false = kết quả kiểm tra gần nhất
+
+function engineLabel(){
+  if(CFG.engine==="vision") return visionOK===false?"Vision (mất kết nối)":"Apple Vision";
+  if(CFG.engine==="auto")   return visionOK?"Vision (tự động)":"Tesseract (tự động)";
+  return "Tesseract";
+}
+function refreshEngineUI(){ $("sysEngine").textContent=engineLabel(); }
+
+function canvasToBlob(c){
+  return new Promise(res=>{
+    if(c.toBlob) c.toBlob(b=>res(b),"image/jpeg",0.92);
+    else{ const d=c.toDataURL("image/jpeg",0.92), bin=atob(d.split(",")[1]);
+      const arr=new Uint8Array(bin.length); for(let i=0;i<bin.length;i++)arr[i]=bin.charCodeAt(i);
+      res(new Blob([arr],{type:"image/jpeg"})); }
+  });
+}
+function baseUrl(){
+  let u=(CFG.url||"").trim().replace(/\/+$/,"");
+  if(u&&!/^https?:\/\//i.test(u)) u="http://"+u;
+  if(u&&!/:\d+$/.test(u)&&!/\/\w+$/.test(u)) u+=":8000";   // mặc định cổng 8000
+  return u;
+}
+/* Gọi OCR Server. Ném lỗi có thông điệp tiếng Việt rõ ràng để dễ xử lý. */
+async function visionRecognize(canvas, timeoutMs){
+  const url=baseUrl();
+  if(!url) throw new Error("Chưa điền địa chỉ OCR Server.");
+  if(location.protocol==="https:" && url.startsWith("http://"))
+    throw new Error("Trang đang chạy HTTPS nên trình duyệt CHẶN gọi sang máy chủ HTTP nội bộ (mixed content). Xem hướng dẫn trong phần Cài đặt OCR.");
+  const blob=await canvasToBlob(canvas);
+  const fd=new FormData(); fd.append("file", blob, "label.jpg");
+  const ctl=new AbortController();
+  const timer=setTimeout(()=>ctl.abort(), timeoutMs||15000);
+  try{
+    const r=await fetch(url+"/upload",{method:"POST",body:fd,
+      headers:{"Accept":"application/json"}, signal:ctl.signal, mode:"cors"});
+    if(!r.ok) throw new Error("Máy chủ trả lỗi HTTP "+r.status);
+    const j=await r.json();
+    if(j && j.success===false) throw new Error(j.message||"Máy chủ báo thất bại.");
+    const txt=(j&&(j.ocr_result||j.ocr_text))||"";
+    return String(txt);
+  }catch(e){
+    if(e.name==="AbortError") throw new Error("Quá thời gian chờ máy chủ OCR.");
+    if(e instanceof TypeError) throw new Error("Không kết nối được máy chủ OCR (sai IP, khác mạng WiFi, app chưa mở, hoặc trình duyệt chặn CORS/HTTPS).");
+    throw e;
+  }
+}
+async function checkVision(){
+  try{
+    const c=document.createElement("canvas"); c.width=c.height=40;
+    const g=c.getContext("2d"); g.fillStyle="#fff"; g.fillRect(0,0,40,40);
+    await visionRecognize(c, 6000);
+    visionOK=true;
+  }catch(e){ visionOK=false; }
+  refreshEngineUI();
+  return visionOK;
+}
+function ocrReady(){
+  if(CFG.engine==="vision") return !!baseUrl();
+  return !!ocrWorker || (CFG.engine==="auto" && !!baseUrl());
+}
+/* Cổng chung — mọi nơi trong tool đều gọi hàm này thay vì gọi thẳng Tesseract */
+async function ocrText(canvas){
+  if(CFG.engine==="vision") return await visionRecognize(canvas);
+  if(CFG.engine==="auto" && baseUrl() && visionOK!==false){
+    try{ const t=await visionRecognize(canvas); visionOK=true; refreshEngineUI(); return t; }
+    catch(e){ visionOK=false; refreshEngineUI();
+      procMsg("warn","OCR Server không dùng được ("+e.message+") — tạm chuyển sang Tesseract."); }
+  }
+  if(!ocrWorker) throw new Error("Tesseract chưa sẵn sàng.");
+  const {data}=await ocrWorker.recognize(canvas);
+  return data.text||"";
+}
+/* Vision đọc tốt nhất trên ảnh gốc; Tesseract cần nhị phân hóa => chọn biến thể phù hợp */
+const preferGray = ()=> CFG.engine==="vision" || (CFG.engine==="auto" && visionOK);
+
+/* ── Cài đặt: nạp UI, kiểm tra, lưu ── */
+(function initCfg(){
+  const setRadio=()=>{ document.querySelectorAll('input[name="eng"]').forEach(r=>r.checked=(r.value===CFG.engine)); };
+  $("cfgUrl").value=CFG.url||""; setRadio(); refreshEngineUI();
+  $("cfgToggle").onclick=e=>{ e.preventDefault();
+    const b=$("cfgBox"); b.style.display=b.style.display==="none"?"block":"none"; };
+  $("cfgTest").onclick=async ()=>{
+    const prev={...CFG};
+    CFG.url=$("cfgUrl").value;
+    $("cfgMsg").textContent="Đang kiểm tra…";
+    try{
+      const c=document.createElement("canvas"); c.width=240; c.height=90;
+      const g=c.getContext("2d"); g.fillStyle="#fff"; g.fillRect(0,0,240,90);
+      g.fillStyle="#000"; g.font="bold 44px sans-serif"; g.fillText("TEST-42",12,60);
+      const t=await visionRecognize(c, 12000);
+      $("cfgMsg").innerHTML='<span style="color:var(--ok)">✓ Kết nối được. Máy chủ đọc thử ra: "'+esc(t.trim().slice(0,40))+'"</span>';
+      visionOK=true;
+    }catch(e){
+      $("cfgMsg").innerHTML='<span style="color:var(--bad)">✕ '+esc(e.message)+'</span>'+
+        (location.protocol==="https:"
+          ? '<div style="margin-top:8px;color:var(--muted)">Vì trang này mở qua HTTPS (GitHub Pages), trình duyệt không cho gọi máy chủ HTTP trong LAN. Cách dùng được: tải file HTML này về máy tính/NAS rồi mở qua một web server nội bộ dạng <b>http://…</b> (cùng giao thức HTTP), khi đó mới gọi được iPhone OCR Server.</div>'
+          : '');
+      visionOK=false;
+      CFG=prev;
+    }
+    refreshEngineUI();
+  };
+  $("cfgSave").onclick=async ()=>{
+    const sel=document.querySelector('input[name="eng"]:checked');
+    CFG.engine=sel?sel.value:"tesseract";
+    CFG.url=$("cfgUrl").value.trim();
+    localStorage.setItem(CFG_KEY, JSON.stringify(CFG));
+    $("cfgMsg").innerHTML='<span style="color:var(--ok)">Đã lưu cài đặt.</span>';
+    refreshEngineUI();
+    if(CFG.engine!=="tesseract" && baseUrl()) checkVision();
+  };
+  if(CFG.engine!=="tesseract" && baseUrl()) setTimeout(checkVision, 800);
+})();
 
 /* ── 4. Trạng thái & UI ── */
 let current=null, lastShotCand=null;
@@ -356,13 +565,14 @@ function showResult(qr, ocr, extraNote, override){
 
 const KEY="label-check-history";
 const loadHist=()=>{try{return JSON.parse(localStorage.getItem(KEY))||[]}catch{return[]}};
+const esc=t=>String(t==null?"":t).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
 function renderHist(){
   const h=loadHist(); $("histCount").textContent=h.length;
   $("histList").innerHTML = h.length? h.map(x=>
-    `<div class="hist-item"><span class="t">${new Date(x.at).toLocaleString("vi-VN")}</span>
-     <span class="tag t-${x.verdict}">${x.title}</span>
-     <div class="mono">QR: ${x.qr}</div><div class="mono">OCR: ${x.ocr}</div>
-     ${x.userNote?`<div style="color:var(--muted);margin-top:4px">${x.userNote.replace(/</g,"&lt;")}</div>`:""}</div>`
+    `<div class="hist-item"><span class="t">${esc(new Date(x.at).toLocaleString("vi-VN"))}</span>
+     <span class="tag t-${esc(x.verdict)}">${esc(x.title)}</span>
+     <div class="mono">QR: ${esc(x.qr)}</div><div class="mono">OCR: ${esc(x.ocr)}</div>
+     ${x.userNote?`<div style="color:var(--muted);margin-top:4px">${esc(x.userNote)}</div>`:""}</div>`
   ).join("") : `<div class="hist-empty">Chưa có bản ghi nào.</div>`;
 }
 $("btnSave").onclick=()=>{
@@ -409,6 +619,7 @@ async function initCam(){
   }
 }
 
+let qrBoxVideo=null, qrBoxAt=0;   // vị trí 4 góc QR trong khung video (mới nhất)
 function scanQRFrame(){
   if(typeof jsQR==="undefined") return null;
   const w=video.videoWidth,h=video.videoHeight;
@@ -420,7 +631,15 @@ function scanQRFrame(){
     ctx.drawImage(video,0,0,cv.width,cv.height);
     const img=ctx.getImageData(0,0,cv.width,cv.height);
     const code=jsQR(img.data,img.width,img.height,{inversionAttempts:inv});
-    if(code&&code.data&&code.data.trim()) return code.data.trim();
+    if(code&&code.data&&code.data.trim()){
+      const L=code.location, f=1/sc;
+      const xs=[L.topLeftCorner.x,L.topRightCorner.x,L.bottomLeftCorner.x,L.bottomRightCorner.x].map(v=>v*f);
+      const ys=[L.topLeftCorner.y,L.topRightCorner.y,L.bottomLeftCorner.y,L.bottomRightCorner.y].map(v=>v*f);
+      const x=Math.min(...xs), y=Math.min(...ys);
+      qrBoxVideo={x, y, w:Math.max(...xs)-x, h:Math.max(...ys)-y};
+      qrBoxAt=Date.now();
+      return code.data.trim();
+    }
   }
   return null;
 }
@@ -435,52 +654,46 @@ async function autoScan(){
   if(!qrLive) return;
   autoBusy=true;
   try{
-    const qr=qrLive, qc=normCore(qr);
-    const {data}=await ocrWorker.recognize(makeOcrCanvas(true));
+    const qr=qrLive;
+    const text=await ocrText(makeOcrCanvas(!preferGray()));
     if(current||!qrLive||shotBusy){return;}  // trạng thái đổi trong lúc đọc => bỏ
-    const raw=data.text||"";
-    const f=fuzzyFind(qc, normCore(raw));
-    const rel=f.dist/Math.max(qc.length,1);
-    if(rel<=0.25){
-      const cand=extractItemNo(raw);
-      let ocrDisplay=f.sub;
-      if(cand && fuzzyFind(qc,normCore(cand)).dist<=rel*qc.length+2) ocrDisplay=cand;
-      let r=compareLabels(qr,ocrDisplay);
-      /* Lệch nhỏ 1-2 ký tự => thẻ VÀNG "xác nhận mắt" thay vì đỏ:
-         với QR làm chuẩn, đa số là OCR đọc sai ký tự chứ không phải nhãn in sai */
-      if(r.verdict==="MISMATCH" && f.dist<=2){
-        $("chipOCR").textContent=ocrDisplay; $("dotOCR").className="dot on";
-        showResult(qr,ocrDisplay,null,{verdict:"MATCH_LOOSE",title:"Gần khớp — xác nhận mắt",
-          note:`GẦN KHỚP: lệch ${f.dist} ký tự — khả năng cao là OCR đọc sai. Nhìn nhãn thật để xác nhận rồi sửa ghi chú nếu cần. QR: "${qr}" | OCR: "${ocrDisplay}".`});
-        return;
-      }
-      if(r.verdict==="MATCH"||r.verdict==="MATCH_FORMAT_ONLY"||r.verdict==="MATCH_LOOSE"){
-        $("chipOCR").textContent=ocrDisplay; $("dotOCR").className="dot on";
-        showResult(qr,ocrDisplay);
-      }else{
-        $("chipOCR").textContent=ocrDisplay+" (?)";
-        procMsg("warn","Tự động phát hiện khả năng lệch — bấm 📸 Quét trực tiếp để xác nhận (chống nhầm do OCR).");
-      }
+    const v=resolveVerdict(qr,[text]);
+    if(v.kind==="OK"){
+      $("chipOCR").textContent=v.ocr; $("dotOCR").className="dot on";
+      showResult(qr,v.ocr);
+    }else if(v.kind==="AMBIGUOUS"||v.kind==="SUSPECT"||v.kind==="MISMATCH_CONFIRMED"){
+      /* Nghi lệch: KHÔNG tự chốt. Bấm 📸 để tool đọc nhiều lượt rồi kết luận. */
+      $("chipOCR").textContent=(v.ocr||"?")+" (?)";
+      procMsg("warn","Nghi lệch so với QR — bấm 📸 Quét trực tiếp để tool đọc lại nhiều lượt và kết luận (không tự chốt khi nghi lệch).");
     }
   }catch(e){}
   finally{ autoBusy=false; }
 }
 
+let lastQRScanAt=0;
 function loop(){
   if(video.readyState>=2){
-    frameNo++;
     try{
-      const q=scanQRFrame();
-      if(q){
-        if(qrLive && q!==qrLive){
-          /* Thấy QR KHÁC => đã chuyển sang kiện mới: xóa kết quả kiện cũ */
-          current=null; lastShotCand=null;
-          $("card").className="card";
-          procMsg("info","Đã nhận kiện mới theo QR vừa quét.");
-        }
-        qrLive=q; qrSeenAt=Date.now();
-        $("chipQR").textContent=q; $("dotQR").className="dot on";
-        updateStep();
+      /* LỖI CŨ (nguyên nhân chính gây CHẬM): quét QR ở MỌI khung hình, cứ 3
+         khung lại đọc nguyên ảnh 1920×1440 (~11MB/lần, tới 20 lần/giây) —
+         chiếm hết CPU nên OCR bị bỏ đói. Nay giới hạn ~5 lần/giây, và khi đã
+         khóa được QR thì giãn còn ~1.5 lần/giây (chỉ để phát hiện đổi kiện). */
+      const now=Date.now();
+      const gap = qrLive ? 650 : 200;
+      if(now-lastQRScanAt>=gap){
+        lastQRScanAt=now; frameNo++;
+        const q=scanQRFrame();
+        if(q && q!==qrLive){
+          if(qrLive){
+            /* Thấy QR KHÁC => đã chuyển sang kiện mới: xóa kết quả kiện cũ */
+            current=null; lastShotCand=null;
+            $("card").className="card";
+            procMsg("info","Đã nhận kiện mới theo QR vừa quét.");
+          }
+          qrLive=q; qrSeenAt=now;
+          $("chipQR").textContent=q; $("dotQR").className="dot on";
+          updateStep();
+        }else if(q){ qrSeenAt=now; }
       }
       /* QR được KHÓA THEO PHIÊN KIỆN — không tự hết hạn nữa, vì thao tác
          chuẩn là quét QR xong rồi rời sang soi sát nhãn vàng (lâu hơn 8s).
@@ -509,23 +722,30 @@ function otsu(hist,total){
 function updateStep(){
   const locked=!!qrLive;
   $("stepBanner").textContent = locked
-    ? "Bước 2: Soi SÁT dòng ITEM NO nhãn vàng vào băng ngắm xanh"
-    : "Bước 1: Quét mã QR trên nhãn trắng";
+    ? "Đã khóa QR ✓ — giữ CẢ NHÃN (kèm tem QR) trong khung để tự đối chiếu"
+    : "Đưa cả nhãn (kèm tem QR) vào khung — hoặc dùng nút 📷 Chụp ảnh";
   $("stepBanner").style.color = locked ? "var(--ok)" : "var(--gold)";
-  $("frameBand").style.display = locked ? "block" : "none";
-  $("frameWide").style.display = locked ? "none" : "block";
+  $("frameBand").style.display = "none";
+  $("frameWide").style.display = "block";
 }
 
-function makeOcrCanvas(binarize){
+function makeOcrCanvas(binarize, forceWide){
   const w=video.videoWidth,h=video.videoHeight;
-  /* Bước 2 (đã có QR): chỉ đọc BĂNG NGẮM hẹp giữa khung — ảnh nhỏ hơn ~2 lần
-     => nhanh hơn ~2 lần và ít dính chữ nhiễu xung quanh. Chưa có QR: crop rộng. */
-  const narrow=!!qrLive;
-  const cx=Math.round(w*(narrow?.05:.06));
-  const cy=Math.round(h*(narrow?.30:.06));
-  const cw=Math.round(w*(narrow?.90:.88));
-  const ch=Math.round(h*(narrow?.30:.64));
-  const scale=Math.min(1, (narrow?1000:1100)/cw);
+  /* NEO THEO VỊ TRÍ QR: nếu QR đang thấy trong khung (≤1.5s), cắt đúng vùng
+     nhãn quanh nó (ITEM NO luôn nằm trái/trên tem QR) ở phân giải gốc — chữ
+     to nét, ảnh nhỏ, đọc nhanh. QR không trong khung => crop rộng giữa khung.
+     (Băng ngắm cố định cũ đã BỎ vì bị lệch so với vùng hiển thị object-fit.) */
+  let cx,cy,cw,ch;
+  if(!forceWide && qrBoxVideo && Date.now()-qrBoxAt<1500){
+    const b=qrBoxVideo;
+    cx=b.x-5.8*b.w; cy=b.y-1.6*b.h; cw=6.4*b.w; ch=3.4*b.h;
+    cx=Math.max(0,cx); cy=Math.max(0,cy);
+    cw=Math.min(w-cx,cw); ch=Math.min(h-cy,ch);
+  }else{
+    cx=Math.round(w*.06); cy=Math.round(h*.06);
+    cw=Math.round(w*.88); ch=Math.round(h*.64);
+  }
+  const scale=Math.min(1, 1200/cw);
   const c=document.createElement("canvas");
   c.width=Math.round(cw*scale); c.height=Math.round(ch*scale);
   const g=c.getContext("2d"); g.imageSmoothingEnabled=true;
@@ -548,7 +768,7 @@ function makeOcrCanvas(binarize){
 /* ── 7. Nút 📸: xóa trạng thái cũ, đọc frame HIỆN TẠI, thẩm định rồi mới kết luận ── */
 $("btnShot").onclick=async ()=>{
   if(video.readyState<2){procMsg("warn","Camera chưa sẵn sàng.");return;}
-  if(!ocrWorker){procMsg("warn","OCR chưa tải xong (xem trạng thái đầu trang). Chờ dấu ✓ rồi thử lại, hoặc dùng Nhập tay.");return;}
+  if(!ocrReady()){procMsg("warn","Bộ đọc OCR chưa sẵn sàng (xem trạng thái đầu trang). Chờ dấu ✓ rồi thử lại, hoặc dùng Nhập tay.");return;}
 
   shotBusy=true;
   /* chờ lượt auto đang chạy dở (nếu có) kết thúc — tránh xếp hàng chồng job */
@@ -568,49 +788,36 @@ $("btnShot").onclick=async ()=>{
     qrLive=qr; qrSeenAt=Date.now();
     $("chipQR").textContent=qr; $("dotQR").className="dot on";
 
-    /* (2) OCR: chạy 1 lượt (Otsu) trước; chỉ chạy biến thể 2 khi lượt 1 chưa đạt */
-    const qc=normCore(qr);
-    let best={rel:Infinity,text:"",sub:""};
-    for(const bin of [true,false]){
-      const {data}=await ocrWorker.recognize(makeOcrCanvas(bin));
-      const raw=data.text||"";
-      const f=fuzzyFind(qc, normCore(raw));
-      const rel=f.dist/Math.max(qc.length,1);
-      if(rel<best.rel) best={rel,text:raw,sub:f.sub};
-      if(best.rel<=0.25) break;   // lượt 1 đã đạt => không tốn thời gian chạy thêm
+    /* (2) Đọc NHIỀU LƯỢT: Otsu (neo QR) → xám (neo QR) → crop rộng dự phòng.
+       Dừng sớm khi đã có kết luận chắc chắn để không tốn thời gian. */
+    const reads=[];
+    const g=preferGray();
+    const variants = g ? [[false,false],[false,true],[true,false]]
+                       : [[true,false],[false,false],[true,true]];
+    for(const [bin,wide] of variants){
+      reads.push(await ocrText(makeOcrCanvas(bin,wide)));
+      const probe=resolveVerdict(qr,reads);
+      if(probe.kind==="OK") break;                       // khớp rõ => đủ
+      if(probe.kind==="MISMATCH_CONFIRMED" && reads.length>=2) break;
     }
 
-    /* (3) Thẩm định theo mỏ neo QR */
-    const cand=extractItemNo(best.text);
-    if(best.rel<=0.25){
-      /* OCR bám sát QR => tin được. Ưu tiên bản trích "đẹp" nếu cùng lõi. */
-      let ocrDisplay = best.sub;
-      if(cand && fuzzyFind(qc,normCore(cand)).dist <= best.rel*qc.length+1) ocrDisplay=cand;
-      $("chipOCR").textContent=ocrDisplay; $("dotOCR").className="dot on";
-      const d=Math.round(best.rel*qc.length);
-      const r0=compareLabels(qr,ocrDisplay);
-      if(r0.verdict==="MISMATCH" && d<=2){
-        showResult(qr,ocrDisplay,null,{verdict:"MATCH_LOOSE",title:"Gần khớp — xác nhận mắt",
-          note:`GẦN KHỚP: lệch ${d} ký tự — khả năng cao là OCR đọc sai. Nhìn nhãn thật để xác nhận rồi sửa ghi chú nếu cần. QR: "${qr}" | OCR: "${ocrDisplay}".`});
-      }else{
-        showResult(qr, ocrDisplay);
-      }
-    }else if(cand && /\d/.test(cand) && /-/.test(cand) && cand.length>=10){
-      /* OCR KHÔNG bám QR nhưng ra một mã trông "sạch" => nghi nhãn dán nhầm mã.
-         Yêu cầu 2 lần chụp liên tiếp ra CÙNG mã mới kết luận lệch (chặn rác). */
-      if(lastShotCand && normCore(cand)===normCore(lastShotCand)){
-        $("chipOCR").textContent=cand; $("dotOCR").className="dot on";
-        showResult(qr, cand, "(Đã xác nhận qua 2 lần chụp ra cùng một mã.)");
-      }else{
-        lastShotCand=cand;
-        $("chipOCR").textContent=cand+" (?)";
-        procMsg("warn",`Đọc ra mã "${cand}" — KHÁC hẳn mã QR. Để chắc không phải lỗi OCR: giữ nguyên nhãn, bấm Chụp thêm 1 lần. Nếu vẫn ra đúng mã này, tool sẽ kết luận lệch.`);
-      }
+    /* (3) Kết luận theo đồng thuận nhiều lượt đọc */
+    const v=resolveVerdict(qr,reads);
+    if(v.kind==="OK"){
+      $("chipOCR").textContent=v.ocr; $("dotOCR").className="dot on";
+      showResult(qr, v.ocr);
+    }else if(v.kind==="MISMATCH_CONFIRMED"){
+      $("chipOCR").textContent=v.ocr; $("dotOCR").className="dot on";
+      showResult(qr, v.ocr, null, {verdict:"MISMATCH", title:"Lệch nội dung",
+        note:`LỆCH NỘI DUNG — nhiều lượt đọc đều ra cùng kết quả khác QR. QR: "${qr}" | Nhãn vàng (OCR): "${v.ocr}". Kiểm tra kiện hàng này.`});
+    }else if(v.kind==="AMBIGUOUS"||v.kind==="SUSPECT"){
+      $("chipOCR").textContent=(v.ocr||"?")+" (?)"; $("dotOCR").className="dot";
+      showResult(qr, v.ocr||"", null, {verdict:"MATCH_LOOSE", title:"Chưa chắc — phải xem mắt",
+        note:`CHƯA KẾT LUẬN ĐƯỢC: các lượt đọc không thống nhất (lệch ${v.dist||"?"} ký tự so với QR). Có thể là OCR đọc sai, cũng có thể nhãn dán nhầm. HÃY NHÌN NHÃN THẬT và so với QR: "${qr}" — rồi sửa ghi chú này trước khi lưu.`});
     }else{
-      /* OCR rác / đọc thiếu => KHÔNG kết luận */
       lastShotCand=null;
       $("chipOCR").textContent="Chưa rõ";
-      procMsg("warn","OCR chưa đọc rõ nhãn vàng (chữ thiếu hoặc nhiễu). Đưa nhãn gần hơn, đủ sáng, cầm chắc tay rồi bấm Chụp lại — hoặc dùng Nhập tay.");
+      procMsg("warn","OCR chưa đọc rõ nhãn vàng (chữ thiếu hoặc nhiễu). Đưa nhãn gần hơn, đủ sáng, cầm chắc tay rồi bấm lại — hoặc dùng Nhập tay.");
     }
   }catch(e){
     console.warn(e);
@@ -662,19 +869,71 @@ function qrFromCanvas(c){
     const g=c.getContext("2d");
     const img=g.getImageData(0,0,c.width,c.height);
     const code=jsQR(img.data,img.width,img.height,{inversionAttempts:"attemptBoth"});
-    return (code&&code.data&&code.data.trim())||null;
+    if(!(code&&code.data&&code.data.trim())) return null;
+    const L=code.location;
+    const xs=[L.topLeftCorner.x,L.topRightCorner.x,L.bottomLeftCorner.x,L.bottomRightCorner.x];
+    const ys=[L.topLeftCorner.y,L.topRightCorner.y,L.bottomLeftCorner.y,L.bottomRightCorner.y];
+    const x=Math.min(...xs), y=Math.min(...ys);
+    return {text:code.data.trim(),
+            box:{x, y, w:Math.max(...xs)-x, h:Math.max(...ys)-y},
+            cw:c.width, ch:c.height};
   }catch(e){ return null; }
 }
+/* Cắt vùng nhãn quanh tem QR từ ảnh gốc (phân giải đầy đủ => chữ nét) */
+function anchoredCanvas(bmp, qrHit, binarize){
+  const bw=bmp.width||bmp.naturalWidth, bh=bmp.height||bmp.naturalHeight;
+  const f=bw/qrHit.cw;                          // map từ canvas dò QR về ảnh gốc
+  const b={x:qrHit.box.x*f, y:qrHit.box.y*f, w:qrHit.box.w*f, h:qrHit.box.h*f};
+  let cx=Math.max(0,b.x-5.8*b.w), cy=Math.max(0,b.y-1.6*b.h);
+  let cw=Math.min(bw-cx,6.4*b.w), ch=Math.min(bh-cy,3.4*b.h);
+  const scale=Math.min(1,1200/cw);
+  const c=document.createElement("canvas");
+  c.width=Math.round(cw*scale); c.height=Math.round(ch*scale);
+  const g=c.getContext("2d"); g.imageSmoothingEnabled=true;
+  g.drawImage(bmp,cx,cy,cw,ch,0,0,c.width,c.height);
+  const img=g.getImageData(0,0,c.width,c.height), d=img.data;
+  const hist=new Array(256).fill(0), gray=new Uint8Array(d.length/4);
+  for(let i=0,j=0;i<d.length;i+=4,j++){
+    const v=(d[i]*.3+d[i+1]*.59+d[i+2]*.11)|0; gray[j]=v; hist[v]++;
+  }
+  const th=binarize?otsu(hist,gray.length):-1;
+  for(let i=0,j=0;i<d.length;i+=4,j++){
+    const t=binarize?(gray[j]>th?255:0):gray[j];
+    d[i]=d[i+1]=d[i+2]=t;
+  }
+  g.putImageData(img,0,0);
+  return c;
+}
+/* Đọc 1 tấm ảnh nhiều lượt, tạo canvas KHI CẦN và dừng sớm khi đã chắc chắn */
+async function readPhoto(bmp, hit, qr){
+  const reads=[];
+  const makers=[];
+  const g=preferGray();
+  if(hit){
+    makers.push(()=>anchoredCanvas(bmp,hit,!g));
+    makers.push(()=>anchoredCanvas(bmp,hit,g));
+  }
+  makers.push(()=>photoCanvas(bmp,1600,false));
+  for(const mk of makers){
+    reads.push(await ocrText(mk()));
+    const probe=resolveVerdict(qr,reads);
+    if(probe.kind==="OK") break;
+    if(probe.kind==="MISMATCH_CONFIRMED" && reads.length>=2) break;
+  }
+  return reads;
+}
+
 async function processPhoto(file){
-  if(!ocrWorker){procMsg("warn","OCR chưa tải xong (xem trạng thái đầu trang). Chờ dấu ✓ rồi thử lại.");return;}
+  if(!ocrReady()){procMsg("warn","Bộ đọc OCR chưa sẵn sàng (xem trạng thái đầu trang). Chờ dấu ✓ rồi thử lại.");return;}
   shotBusy=true;
   for(let i=0;i<40&&autoBusy;i++) await new Promise(r=>setTimeout(r,100));
   $("btnPhoto").disabled=$("btnShot").disabled=true;
   procMsg("info","Đang xử lý ảnh chụp…");
   try{
     const bmp=await loadBitmap(file);
-    /* QR: thử giải mã từ chính tấm ảnh ở 2 cỡ; không có thì dùng QR đã khóa */
-    let qr=qrFromCanvas(photoCanvas(bmp,1600))||qrFromCanvas(photoCanvas(bmp,900))||qrLive;
+    /* QR: giải mã từ chính tấm ảnh (lấy cả vị trí 4 góc để neo vùng cắt) */
+    const hit=qrFromCanvas(photoCanvas(bmp,1600))||qrFromCanvas(photoCanvas(bmp,900));
+    let qr=(hit&&hit.text)||qrLive;
     if(!qr){
       procMsg("warn","Không thấy mã QR trong ảnh và cũng chưa quét QR trước đó. Chụp lại sao cho thấy cả QR nhãn trắng, hoặc quét QR trực tiếp trước.");
       return;
@@ -682,39 +941,21 @@ async function processPhoto(file){
     qrLive=qr; qrSeenAt=Date.now();
     $("chipQR").textContent=qr; $("dotQR").className="dot on"; updateStep();
 
-    /* OCR trên ảnh chụp (cap 1400px): Otsu trước, chưa đạt mới chạy bản xám */
-    const qc=normCore(qr);
-    let best={rel:Infinity,text:"",sub:""};
-    for(const bin of [true,false]){
-      const {data}=await ocrWorker.recognize(photoCanvas(bmp,1400,bin));
-      const raw=data.text||"";
-      const f=fuzzyFind(qc, normCore(raw));
-      const rel=f.dist/Math.max(qc.length,1);
-      if(rel<best.rel) best={rel,text:raw,sub:f.sub};
-      if(best.rel<=0.25) break;
-    }
-    const cand=extractItemNo(best.text);
-    if(best.rel<=0.25){
-      let ocrDisplay=best.sub;
-      if(cand && fuzzyFind(qc,normCore(cand)).dist<=best.rel*qc.length+1) ocrDisplay=cand;
-      $("chipOCR").textContent=ocrDisplay; $("dotOCR").className="dot on";
-      const d=Math.round(best.rel*qc.length);
-      const r0=compareLabels(qr,ocrDisplay);
-      if(r0.verdict==="MISMATCH" && d<=2){
-        showResult(qr,ocrDisplay,null,{verdict:"MATCH_LOOSE",title:"Gần khớp — xác nhận mắt",
-          note:`GẦN KHỚP: lệch ${d} ký tự — khả năng cao là OCR đọc sai. Nhìn nhãn thật để xác nhận rồi sửa ghi chú nếu cần. QR: "${qr}" | OCR: "${ocrDisplay}".`});
-      }else{
-        showResult(qr, ocrDisplay);
-      }
-    }else if(cand && /\d/.test(cand) && /-/.test(cand) && cand.length>=10){
-      if(lastShotCand && normCore(cand)===normCore(lastShotCand)){
-        $("chipOCR").textContent=cand; $("dotOCR").className="dot on";
-        showResult(qr, cand, "(Đã xác nhận qua 2 tấm ảnh ra cùng một mã.)");
-      }else{
-        lastShotCand=cand;
-        $("chipOCR").textContent=cand+" (?)";
-        procMsg("warn",`Đọc ra mã "${cand}" — KHÁC hẳn mã QR. Chụp thêm 1 tấm nữa; nếu vẫn ra đúng mã này, tool sẽ kết luận lệch.`);
-      }
+    /* OCR nhiều lượt, TẠO CANVAS KHI CẦN (lỗi cũ: dựng sẵn cả 3 canvas kể cả
+       ảnh 1600px dù thường chỉ dùng lượt đầu => tốn bộ nhớ & thời gian mỗi tấm) */
+    const reads=await readPhoto(bmp,hit,qr);
+    const v=resolveVerdict(qr,reads);
+    if(v.kind==="OK"){
+      $("chipOCR").textContent=v.ocr; $("dotOCR").className="dot on";
+      showResult(qr, v.ocr);
+    }else if(v.kind==="MISMATCH_CONFIRMED"){
+      $("chipOCR").textContent=v.ocr; $("dotOCR").className="dot on";
+      showResult(qr, v.ocr, null, {verdict:"MISMATCH", title:"Lệch nội dung",
+        note:`LỆCH NỘI DUNG — nhiều lượt đọc đều ra cùng kết quả khác QR. QR: "${qr}" | Nhãn vàng (OCR): "${v.ocr}". Kiểm tra kiện hàng này.`});
+    }else if(v.kind==="AMBIGUOUS"||v.kind==="SUSPECT"){
+      $("chipOCR").textContent=(v.ocr||"?")+" (?)"; $("dotOCR").className="dot";
+      showResult(qr, v.ocr||"", null, {verdict:"MATCH_LOOSE", title:"Chưa chắc — phải xem mắt",
+        note:`CHƯA KẾT LUẬN ĐƯỢC: các lượt đọc không thống nhất (lệch ${v.dist||"?"} ký tự so với QR). Có thể là OCR đọc sai, cũng có thể nhãn dán nhầm. HÃY NHÌN ẢNH/NHÃN THẬT và so với QR: "${qr}" — rồi sửa ghi chú này trước khi lưu.`});
     }else{
       lastShotCand=null;
       $("chipOCR").textContent="Chưa rõ";
@@ -747,39 +988,24 @@ async function analyzePhoto(file){
   let bmp=null;
   try{
     bmp=await loadBitmap(file);
-    out.qr = qrFromCanvas(photoCanvas(bmp,1600)) || qrFromCanvas(photoCanvas(bmp,900));
+    const hit=qrFromCanvas(photoCanvas(bmp,1600))||qrFromCanvas(photoCanvas(bmp,900));
+    out.qr = hit&&hit.text;
     if(!out.qr){
       out.verdict="NO_QR"; out.title="Thiếu QR";
       out.note="Không giải mã được QR trong ảnh — chụp lại tấm này, lấy rõ nhãn trắng.";
       return out;
     }
-    const qc=normCore(out.qr);
-    let best={rel:Infinity,text:"",sub:""};
-    for(const bin of [true,false]){
-      const {data}=await ocrWorker.recognize(photoCanvas(bmp,1400,bin));
-      const raw=data.text||"";
-      const f=fuzzyFind(qc, normCore(raw));
-      const rel=f.dist/Math.max(qc.length,1);
-      if(rel<best.rel) best={rel,text:raw,sub:f.sub};
-      if(best.rel<=0.25) break;
-    }
-    const cand=extractItemNo(best.text);
-    if(best.rel<=0.25){
-      let ocrDisplay=best.sub;
-      if(cand && fuzzyFind(qc,normCore(cand)).dist<=best.rel*qc.length+1) ocrDisplay=cand;
-      out.ocr=ocrDisplay;
-      const d=Math.round(best.rel*qc.length);
-      const r=compareLabels(out.qr,ocrDisplay);
-      if(r.verdict==="MISMATCH" && d<=2){
-        out.verdict="REVIEW"; out.title="Gần khớp — xem mắt";
-        out.note=`Lệch ${d} ký tự — khả năng cao OCR đọc sai; đối chiếu mắt với ảnh gốc.`;
-      }else{
-        out.verdict=r.verdict; out.title=r.title; out.note=r.note;
-      }
-    }else if(cand && /\d/.test(cand) && /-/.test(cand) && cand.length>=10){
-      out.ocr=cand;
-      out.verdict="MISMATCH"; out.title="Nghi lệch — kiểm tay";
-      out.note=`OCR đọc ra mã "${cand}" khác hẳn QR "${out.qr}". Kiểm tra kiện này bằng mắt / chụp lại để xác nhận.`;
+    const reads=await readPhoto(bmp,hit,out.qr);
+    const v=resolveVerdict(out.qr,reads);
+    if(v.kind==="OK"){
+      out.ocr=v.ocr; out.verdict=v.res.verdict; out.title=v.res.title;
+      out.note=v.res.verdict==="MATCH"?"Khớp tuyệt đối.":"Khớp nội dung (chênh lệch chỉ do OCR).";
+    }else if(v.kind==="MISMATCH_CONFIRMED"){
+      out.ocr=v.ocr; out.verdict="MISMATCH"; out.title="Lệch — kiểm kiện";
+      out.note=`Nhiều lượt đọc đều ra "${v.ocr}" khác QR "${out.qr}". Kiểm tra kiện này.`;
+    }else if(v.kind==="AMBIGUOUS"||v.kind==="SUSPECT"){
+      out.ocr=v.ocr||null; out.verdict="REVIEW"; out.title="Chưa chắc — xem mắt";
+      out.note=`Các lượt đọc không thống nhất (lệch ${v.dist||"?"} ký tự). Mở lại ảnh này đối chiếu bằng mắt với QR "${out.qr}".`;
     }else{
       out.note="OCR chưa đọc rõ ITEM NO — chụp lại tấm này: gần hơn, thẳng góc, đủ sáng.";
     }
@@ -808,18 +1034,18 @@ function renderBatch(processing,total){
   $("batchRows").innerHTML = batchItems.map((x,i)=>{
     const [cls,short]=BATCH_TAG[x.verdict]||BATCH_TAG.UNREADABLE;
     return `<div class="hist-item">
-      <span class="t">#${i+1}${x.file?" · "+x.file.replace(/</g,"&lt;"):""}</span>
+      <span class="t">#${i+1}${x.file?" · "+esc(x.file):""}</span>
       <span class="tag ${cls}">${short}</span>
-      <div class="mono">QR: ${x.qr?x.qr.replace(/</g,"&lt;"):"—"}</div>
-      <div class="mono">OCR: ${x.ocr?x.ocr.replace(/</g,"&lt;"):"—"}</div>
-      <div style="color:var(--muted);margin-top:4px;font-size:13px">${(x.note||"").replace(/</g,"&lt;")}</div>
+      <div class="mono">QR: ${x.qr?esc(x.qr):"—"}</div>
+      <div class="mono">OCR: ${x.ocr?esc(x.ocr):"—"}</div>
+      <div style="color:var(--muted);margin-top:4px;font-size:13px">${esc(x.note||"")}</div>
     </div>`;
   }).join("");
   $("batchCard").style.display="block";
 }
 
 async function processBatch(files){
-  if(!ocrWorker){procMsg("warn","OCR chưa tải xong (xem trạng thái đầu trang). Chờ dấu ✓ rồi thử lại.");return;}
+  if(!ocrReady()){procMsg("warn","Bộ đọc OCR chưa sẵn sàng (xem trạng thái đầu trang). Chờ dấu ✓ rồi thử lại.");return;}
   if(!files.length) return;
   shotBusy=true;
   for(let i=0;i<40&&autoBusy;i++) await new Promise(r=>setTimeout(r,100));
@@ -854,8 +1080,10 @@ $("btnBatchSave").onclick=()=>{
   for(const x of [...batchItems].reverse()){
     h.unshift({
       qr:x.qr||"—", ocr:x.ocr||"—",
-      verdict:(x.verdict in BATCH_TAG && x.verdict.startsWith("MATCH"))||x.verdict==="MISMATCH" ? x.verdict :
-              (x.verdict==="REVIEW"?"MATCH_LOOSE":"MISMATCH"),
+      /* LỖI CŨ: ảnh thiếu QR / không đọc được bị ghi vào lịch sử thành
+         "LỆCH NỘI DUNG" — sai lệch hồ sơ đợt hàng. Nay giữ đúng bản chất. */
+      verdict:(x.verdict==="REVIEW"||x.verdict==="UNREADABLE"||x.verdict==="NO_QR")
+              ? "MATCH_LOOSE" : x.verdict,
       title:x.title, note:x.note, userNote:"["+name+"] "+(x.note||""),
       at:new Date().toISOString(),
     });
