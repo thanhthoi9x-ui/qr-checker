@@ -38964,6 +38964,8 @@ let queue=[], session=[], uid=0;
 
 // Nhuong CPU cho giao dien ve lai. KHONG dung rieng requestAnimationFrame vi no
 // NGUNG chay khi tat man hinh / chuyen app -> se treo giua chung. Co setTimeout du phong.
+// Giai phong canvas ngay sau khi dung xong -> tranh sap may khi chup nhieu anh
+function freeCanvas(c){ try{ c.width=1; c.height=1; }catch(e){} }
 const yieldUI=()=>new Promise(r=>{
   let done=false; const fin=()=>{ if(!done){ done=true; r(); } };
   try{ requestAnimationFrame(()=>setTimeout(fin,0)); }catch(e){}
@@ -39009,9 +39011,12 @@ async function addFiles(files){
   await yieldUI();
   for(const f of files){
     if(f.type && f.type.indexOf('image')!==0) continue;
-    const canvas=await fileToCanvas(f,2400);
-    const item={id:++uid, canvas, url:canvas.toDataURL('image/jpeg',.6)};
+    // CHI tao anh nho de xem truoc; anh lon se doc lai tu file luc kiem tra
+    const thumb=await fileToCanvas(f,260);
+    const item={id:++uid, file:f, url:thumb.toDataURL('image/jpeg',.7)};
+    freeCanvas(thumb);
     queue.push(item); addThumb(item);
+    await yieldUI();
   }
   $('#status').textContent='Đã thêm. Bấm KIỂM TRA TẤT CẢ khi xong.';
   refreshCheckBtn();
@@ -39041,8 +39046,16 @@ $('#btnCheck').onclick=async ()=>{
     $('#btnCheck').textContent=`⏳ ĐANG KIỂM TRA… ${i+1}/${N}`;
     $('#progBar').style.width=Math.round(i/N*100)+'%';
     await yieldUI();                       // cho giao dien kip ve truoc khi chay nang
-    const f=await analyze(batch[i].canvas);
-    renderCard(batch[i], f);
+    let canvas=null;
+    try{
+      canvas=await fileToCanvas(batch[i].file,2400);   // doc anh lon CHI luc can
+      const f=await analyze(canvas);
+      renderCard(batch[i], f);
+    }catch(err){
+      renderCard(batch[i], {qr:'',itemNo:'',item:'',desc:''});
+    }finally{
+      if(canvas) freeCanvas(canvas);                    // tra RAM ngay
+    }
   }
   $('#progBar').style.width='100%';
   $('#busy').classList.remove('on');
@@ -39065,14 +39078,16 @@ async function analyze(src){
     for(const deg of [0,90,270,180]){
       const cv=rotateToCanvas(upright,deg,1);
       let t=''; try{ t=await OCR.text(cv,'page'); }catch(e){}
+      freeCanvas(cv);
       const sc=scoreText(t,qrNorm); if(sc>best.score)best={score:sc,text:t}; if(best.score>=8)break;
     }
     const pf=parseFields(best.text); itemNo=pf.itemNo; item=pf.item;
     if(corners&&corners.length>=3){
       const stk=cropSticker(upright,corners);
-      if(stk){ try{ desc=parseSticker(await OCR.text(stk,'sticker'), qrNorm); }catch(e){} }
+      if(stk){ try{ desc=parseSticker(await OCR.text(stk,'sticker'), qrNorm); }catch(e){} freeCanvas(stk); }
     }
   }
+  if(upright!==src) freeCanvas(upright);
   return {qr:qrVal,itemNo,item,desc};
 }
 
@@ -39151,6 +39166,13 @@ function scoreText(t,qr){const T=(t||'').toUpperCase();let s=0;['ITEM','P.O','QT
 function parseFields(text){const lines=(text||'').replace(/\r/g,'').split('\n').map(l=>l.trim()).filter(Boolean);const j=lines.join(' ');const o={itemNo:'',item:''};
   let m=j.match(/ITEM\s*N[O0]\.?\s*[:.]*\s*([A-Z0-9_().\-\/ ]+?)(?=\s*(ITEM[:\s]|SIZE|QTY|P\.?O|MADE|$))/i);
   if(m)o.itemNo=m[1].replace(/\s+/g,'').replace(/[.\-–]+$/,'');
+  // Du phong: neu khong bat duoc theo nhan "ITEM NO.", tim chuoi ma dang ...-PC(xxxx)-BN
+  if(!o.itemNo){
+    // noi lai dong bi ngat giua ma (dong ket thuc bang '-'), roi tim chuoi dang XX-...-PC(xxxx)-BN
+    const joined=lines.join('\n').replace(/-[ \t]*\n[ \t]*/g,'-').replace(/\n/g,' ');
+    const m2=joined.match(/[A-Z][A-Z0-9]*(?:[-_.][A-Z0-9.]+)*-PC\([A-Z0-9]+\)-[A-Z]{2}/i);
+    if(m2) o.itemNo=m2[0];
+  }
   const il=lines.find(l=>/^\s*ITEM\s*[:.]/i.test(l)&&!/ITEM\s*N/i.test(l));
   if(il)o.item=il.replace(/^\s*ITEM\s*[:.]\s*/i,'').replace(/[=_\[\]|]{1,}.*$/,'').trim();
   else{m=j.match(/ITEM\s*:\s*([A-Za-z0-9"'().\-\/ ]+?)(?=\s*(SIZE|QTY|P\.?O|MADE|ITEM\s*N|$))/i);if(m)o.item=m[1].trim();}
@@ -39259,16 +39281,25 @@ function fileToCanvas(file,max){return new Promise(res=>{const img=new Image();i
   const draw=(src,dw,dh)=>{const c=document.createElement('canvas');c.width=dw;c.height=dh;
     const x=c.getContext('2d');x.imageSmoothingEnabled=true;x.imageSmoothingQuality='high';
     x.drawImage(src,0,0,dw,dh);return c;};
-  if(s>=0.999){ res(draw(img,w,h)); return; }
-  let cur=draw(img,w,h);                       // ve nguyen goc truoc
-  while(cur.width>tw*2 && cur.height>th*2){    // giam dan tung nua -> giu net chu nho
-    cur=draw(cur,Math.max(tw,Math.round(cur.width/2)),Math.max(th,Math.round(cur.height/2)));
+  // KHONG bao gio tao canvas nguyen goc (anh 4032x3024 = 47MB -> sap may).
+  // Ve thang tu <img> xuong kich thuoc da giam, va giai phong canvas trung gian.
+  let cur=null, cw=w, ch=h;
+  while(cw>tw*2 && ch>th*2){                   // giam dan tung nua -> giu net chu nho
+    const nw=Math.max(tw,Math.round(cw/2)), nh=Math.max(th,Math.round(ch/2));
+    const next=draw(cur||img,nw,nh);
+    if(cur) freeCanvas(cur);
+    cur=next; cw=nw; ch=nh;
   }
-  if(cur.width!==tw||cur.height!==th) cur=draw(cur,tw,th);
+  if(!cur||cur.width!==tw||cur.height!==th){
+    const next=draw(cur||img,tw,th);
+    if(cur) freeCanvas(cur);
+    cur=next;
+  }
   res(cur);
 };img.src=URL.createObjectURL(file);});}
 function rotate90(src,k){k=((k%4)+4)%4;let c=src;for(let i=0;i<k;i++){const n=document.createElement('canvas');
-  n.width=c.height;n.height=c.width;const x=n.getContext('2d');x.translate(0,n.height);x.rotate(-Math.PI/2);x.drawImage(c,0,0);c=n;}return c;}
+  n.width=c.height;n.height=c.width;const x=n.getContext('2d');x.translate(0,n.height);x.rotate(-Math.PI/2);x.drawImage(c,0,0);
+  if(c!==src) freeCanvas(c); c=n;}return c;}
 function binarize(cv,thr){const ctx=cv.getContext('2d');const d=ctx.getImageData(0,0,cv.width,cv.height);const p=d.data;
   for(let i=0;i<p.length;i+=4){const g=0.299*p[i]+0.587*p[i+1]+0.114*p[i+2];const v=g>(thr||135)?255:0;p[i]=p[i+1]=p[i+2]=v;}
   ctx.putImageData(d,0,0);return cv;}
