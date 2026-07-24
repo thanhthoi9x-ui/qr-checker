@@ -1,4 +1,4 @@
-const CACHE='qr-paddle-v2';
+const CACHE='qr-paddle-v3';
 const ASSETS=[
  "./",
  "./manifest.json",

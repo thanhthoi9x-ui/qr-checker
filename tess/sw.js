@@ -1,4 +1,4 @@
-const CACHE='qr-tess-v2';
+const CACHE='qr-tess-v3';
 const ASSETS=[
  "./",
  "./manifest.json",

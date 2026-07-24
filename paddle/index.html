@@ -15,7 +15,8 @@
   header h1{margin:0;font-size:16px} header .pill{font-size:11px;color:var(--muted)}
   main{padding:14px;display:flex;flex-direction:column;gap:12px;max-width:680px;margin:0 auto}
   .big{width:100%;border:none;border-radius:14px;padding:16px;font-size:18px;font-weight:800;font-family:inherit;color:#fff}
-  .cap{background:var(--blue)} .check{background:#16a34a} .check:disabled{background:#334155;color:#64748b}
+  .cap{background:var(--blue)} .gal{background:#7c3aed} .check{background:#16a34a}
+  .check:disabled,.cap:disabled,.gal:disabled{background:#334155;color:#64748b}
   .queue{display:grid;grid-template-columns:repeat(auto-fill,minmax(84px,1fr));gap:8px}
   .qitem{position:relative;border-radius:9px;overflow:hidden;background:#000;aspect-ratio:1/1}
   .qitem img{width:100%;height:100%;object-fit:cover}
@@ -53,9 +54,11 @@
   <div class="pill" id="offline"></div>
 </header>
 <main>
-  <input type="file" id="cam" accept="image/*" capture="environment" multiple>
-  <button class="big cap" id="btnCap">📸 CHỤP / CHỌN ẢNH (thêm)</button>
-  <div class="hint" id="hint">Chụp lần lượt nhiều nhãn — mỗi ảnh được thêm vào danh sách bên dưới.</div>
+  <input type="file" id="cam" accept="image/*" capture="environment">
+  <input type="file" id="gal" accept="image/*" multiple>
+  <button class="big cap" id="btnCap">📸 CHỤP ẢNH MỚI</button>
+  <button class="big gal" id="btnGal">🖼️ CHỌN ẢNH CÓ SẴN TRONG MÁY</button>
+  <div class="hint" id="hint">Chụp từng tấm, hoặc chọn nhiều ảnh đã chụp sẵn — tất cả gom vào danh sách bên dưới.</div>
   <div class="queue" id="queue"></div>
   <button class="big check" id="btnCheck" disabled>✅ KIỂM TRA TẤT CẢ (0)</button>
   <div class="status" id="status"></div>
@@ -10212,16 +10215,22 @@ updateCounters();
 })();
 
 // ---------- them anh ----------
-$('#btnCap').onclick=()=>$('#cam').click();
-$('#cam').onchange=async e=>{
-  const files=[...e.target.files]; e.target.value='';
+$('#btnCap').onclick=()=>$('#cam').click();   // mo camera chup moi
+$('#btnGal').onclick=()=>$('#gal').click();   // chon anh co san trong may
+async function addFiles(files){
+  if(!files.length) return;
+  $('#status').textContent='Đang nạp '+files.length+' ảnh…';
   for(const f of files){
+    if(f.type && f.type.indexOf('image')!==0) continue;
     const canvas=await fileToCanvas(f,2000);
     const item={id:++uid, canvas, url:canvas.toDataURL('image/jpeg',.6)};
     queue.push(item); addThumb(item);
   }
+  $('#status').textContent='Đã thêm. Bấm KIỂM TRA TẤT CẢ khi xong.';
   refreshCheckBtn();
-};
+}
+$('#cam').onchange=async e=>{ const f=[...e.target.files]; e.target.value=''; await addFiles(f); };
+$('#gal').onchange=async e=>{ const f=[...e.target.files]; e.target.value=''; await addFiles(f); };
 function addThumb(item){
   const el=document.createElement('div'); el.className='qitem'; el.id='q'+item.id;
   el.innerHTML=`<img src="${item.url}"><span class="no">#${queue.length}</span><button class="rm">×</button>`;
@@ -10234,7 +10243,7 @@ function refreshCheckBtn(){ const b=$('#btnCheck'); b.disabled=queue.length===0;
 // ---------- kiem tra ca loat ----------
 $('#btnCheck').onclick=async ()=>{
   if(!queue.length) return;
-  $('#btnCheck').disabled=true; $('#btnCap').disabled=true;
+  $('#btnCheck').disabled=true; $('#btnCap').disabled=true; $('#btnGal').disabled=true;
   const batch=queue.slice(); queue=[]; $('#queue').innerHTML=''; refreshCheckBtn();
   for(let i=0;i<batch.length;i++){
     $('#status').textContent=`Đang kiểm tra ${i+1}/${batch.length}…`;
@@ -10242,7 +10251,7 @@ $('#btnCheck').onclick=async ()=>{
     renderCard(batch[i], f);
   }
   $('#status').textContent=`Xong ${batch.length} ảnh. Kiểm tra & xác nhận từng ảnh bên dưới.`;
-  $('#btnCap').disabled=false;
+  $('#btnCap').disabled=false; $('#btnGal').disabled=false;
 };
 
 async function analyze(src){
@@ -10463,7 +10472,7 @@ function rotateToCanvas(src,deg,scale){const r=((deg%360)+360)%360,sw=src.width,
 if('serviceWorker' in navigator){
   navigator.serviceWorker.register('./sw.js').catch(()=>{});
   if(navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(()=>{});
-  const EXPECT=7, CACHE='qr-paddle-v2', el=document.getElementById('offline');
+  const EXPECT=7, CACHE='qr-paddle-v3', el=document.getElementById('offline');
   let iv=null;
   const tick=async()=>{
     try{
