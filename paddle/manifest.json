@@ -1,5 +1,5 @@
 {
-  "name": "Check nhãn – PP-OCRv6",
+  "name": "Kiểm tra nhãn QR",
   "short_name": "CheckQR",
   "start_url": "./",
   "scope": "./",
