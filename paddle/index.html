@@ -57,6 +57,15 @@
   .b-pass{background:var(--ok);color:#04240f} .b-err{background:var(--fail);color:#fff}
   .saved{padding:8px 10px;text-align:center;font-size:13px;font-weight:700}
   input[type=file]{display:none} .hint{font-size:12px;color:var(--muted);text-align:center}
+  /* Ho tro may tinh: keo-tha va dan anh */
+  .pc{display:none;font-size:12px;color:var(--muted);text-align:center;
+      border:1px dashed var(--line);border-radius:10px;padding:10px}
+  .pc b{color:#38bdf8}
+  @media (hover:hover) and (pointer:fine){ .pc{display:block} main{max-width:900px} }
+  .dz{position:fixed;inset:0;background:rgba(37,99,235,.25);border:4px dashed #38bdf8;
+      display:none;align-items:center;justify-content:center;z-index:60;pointer-events:none}
+  .dz.on{display:flex}
+  .dz span{background:#0b1220;padding:18px 26px;border-radius:14px;font-size:20px;font-weight:800}
 </style>
 </head>
 <body>
@@ -71,6 +80,7 @@
   <button class="big cap" id="btnCap">📸 CHỤP ẢNH MỚI</button>
   <button class="big gal" id="btnGal">🖼️ CHỌN ẢNH CÓ SẴN TRONG MÁY</button>
   <div class="hint" id="hint">Chụp từng tấm, hoặc chọn nhiều ảnh đã chụp sẵn — tất cả gom vào danh sách bên dưới.</div>
+  <div class="pc">💻 Trên máy tính: <b>kéo-thả ảnh</b> vào cửa sổ này, hoặc copy ảnh rồi bấm <b>Ctrl + V</b> để dán.</div>
   <div class="queue" id="queue"></div>
   <button class="big check" id="btnCheck" disabled>✅ KIỂM TRA TẤT CẢ (0)</button>
   <div class="prog" id="prog"><div class="bar" id="progBar"></div></div>
@@ -83,6 +93,8 @@
   </div>
   <div id="results"></div>
 </main>
+
+<div class="dz" id="dz"><span>📥 Thả ảnh vào đây</span></div>
 
 <div class="busy" id="busy"><div class="card2">
   <div class="big-spin"></div>
@@ -10264,6 +10276,26 @@ async function addFiles(files){
 }
 $('#cam').onchange=async e=>{ const f=[...e.target.files]; e.target.value=''; await addFiles(f); };
 $('#gal').onchange=async e=>{ const f=[...e.target.files]; e.target.value=''; await addFiles(f); };
+
+// ---------- May tinh: keo-tha anh + dan anh (Ctrl+V) ----------
+let dragDepth=0;
+const isImg=f=>f && f.type && f.type.indexOf('image')===0;
+window.addEventListener('dragenter',e=>{
+  if(![...(e.dataTransfer&&e.dataTransfer.types||[])].includes('Files')) return;
+  e.preventDefault(); dragDepth++; $('#dz').classList.add('on');
+});
+window.addEventListener('dragover',e=>{ if(e.dataTransfer) e.preventDefault(); });
+window.addEventListener('dragleave',e=>{ dragDepth=Math.max(0,dragDepth-1); if(!dragDepth) $('#dz').classList.remove('on'); });
+window.addEventListener('drop',async e=>{
+  e.preventDefault(); dragDepth=0; $('#dz').classList.remove('on');
+  const f=[...(e.dataTransfer&&e.dataTransfer.files||[])].filter(isImg);
+  if(f.length) await addFiles(f);
+});
+window.addEventListener('paste',async e=>{
+  const items=[...(e.clipboardData&&e.clipboardData.items||[])];
+  const f=items.filter(i=>i.type&&i.type.indexOf('image')===0).map(i=>i.getAsFile()).filter(Boolean);
+  if(f.length){ e.preventDefault(); await addFiles(f); }
+});
 function addThumb(item){
   const el=document.createElement('div'); el.className='qitem'; el.id='q'+item.id;
   el.innerHTML=`<img src="${item.url}"><span class="no">#${queue.length}</span><button class="rm">×</button>`;
