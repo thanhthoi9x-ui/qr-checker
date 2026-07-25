@@ -39176,7 +39176,7 @@ function saveCard(card,v){
 // ---------- CHUC NANG CHECK ----------
 function computeChecks(f){
   const qr=f.qr,itemNo=f.itemNo,item=f.item,desc=f.desc; let a,b;
-  if(!qr)a={s:'fail',msg:'Không đọc được mã QR.'};
+  if(!qr)a={s:'warn',msg:'⚠ Không đọc được mã QR (ảnh QR mờ/nhỏ) — cắt sát &amp; rõ hơn, hoặc dùng ảnh gốc từ điện thoại.'};
   else if(!itemNo)a={s:'warn',msg:'Chưa có ITEM No. — nhập tay để so.'};
   else if(norm(itemNo)===norm(qr)||norm(qr).includes(norm(itemNo))||norm(itemNo).includes(norm(qr)))a={s:'ok',msg:`Khớp: "${qr}"`};
   else if(loose(itemNo)===loose(qr)||loose(qr).includes(loose(itemNo))||loose(itemNo).includes(loose(qr)))a={s:'ok',msg:`Khớp: "${qr}" (chuẩn hóa O/0, I/1)`};
@@ -39202,9 +39202,18 @@ function bareEq(a,b){
   // chi cho phep "chua trong nhau" khi ma du dai, tranh trung hop ngau nhien
   return x.length>=10 && y.length>=10 && (x.includes(y)||y.includes(x));
 }
+// Khoang cach Levenshtein (so ky tu khac nhau) -> chiu loi OCR trong mo ta
+function lev(a,b){const m=a.length,n=b.length;if(!m)return n;if(!n)return m;
+  let prev=Array.from({length:n+1},(_,i)=>i),cur=new Array(n+1);
+  for(let i=1;i<=m;i++){cur[0]=i;for(let j=1;j<=n;j++){cur[j]=Math.min(prev[j]+1,cur[j-1]+1,prev[j-1]+(a[i-1]===b[j-1]?0:1));}
+    const t=prev;prev=cur;cur=t;}
+  return prev[n];}
+// Tu 'w' co khop (gan dung) voi tu nao trong tap khong? Tu cang dai cho sai cang nhieu.
+function wordMatch(w,set){if(set.has(w))return true;const tol=w.length>=7?2:(w.length>=3?1:0);if(!tol)return false;
+  for(const x of set){if(x[0]!==w[0])continue;if(Math.abs(x.length-w.length)<=tol&&lev(w,x)<=tol)return true;}return false;}
 function similarity(a,b){a=(a||'').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim();b=(b||'').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim();
-  if(!a||!b)return 0;const A=new Set(a.split(' ').filter(w=>w.length>1)),B=new Set(b.split(' ').filter(w=>w.length>1));
-  if(!A.size||!B.size)return 0;let i=0;A.forEach(w=>{if(B.has(w))i++;});return i/Math.min(A.size,B.size);}
+  if(!a||!b)return 0;const A=[...new Set(a.split(' ').filter(w=>w.length>1))],B=new Set(b.split(' ').filter(w=>w.length>1));
+  if(!A.length||!B.size)return 0;let i=0;A.forEach(w=>{if(wordMatch(w,B))i++;});return i/Math.min(A.length,B.size);}
 function scoreText(t,qr){const T=(t||'').toUpperCase();let s=0;['ITEM','P.O','QTY','SIZE','PACKAGE','VIETNAM'].forEach(k=>{if(T.includes(k))s++;});
   if(/ITEM\s*N[O0]/.test(T))s+=2;const ql=loose(qr||'');if(ql&&loose(T).includes(ql))s+=3;return s;}
 function parseFields(text){const lines=(text||'').replace(/\r/g,'').split('\n').map(l=>l.trim()).filter(Boolean);const j=lines.join(' ');const o={itemNo:'',item:''};
