@@ -73,6 +73,7 @@
   <h1>✅ Kiểm tra nhãn QR</h1>
   <div class="pill" id="engine">Đang chuẩn bị…</div>
   <div class="pill" id="offline"></div>
+  <div class="pill" id="ver" style="opacity:.6">phiên bản 25/07 12:11</div>
 </header>
 <main>
   <input type="file" id="cam" accept="image/*" capture="environment">
@@ -10608,7 +10609,7 @@ function rotateToCanvas(src,deg,scale){const r=((deg%360)+360)%360,sw=src.width,
 if('serviceWorker' in navigator){
   navigator.serviceWorker.register('./sw.js').catch(()=>{});
   if(navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(()=>{});
-  const EXPECT=7, CACHE='qr-paddle-v3', el=document.getElementById('offline');
+  const EXPECT=7, CACHE='qr-paddle-v4', el=document.getElementById('offline');
   let iv=null;
   const tick=async()=>{
     try{
