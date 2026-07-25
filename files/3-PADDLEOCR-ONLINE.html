@@ -73,7 +73,7 @@
   <h1>✅ Kiểm tra nhãn — PP-OCRv6</h1>
   <div class="pill" id="engine">Đang chuẩn bị…</div>
   <div class="pill" id="offline"></div>
-  <div class="pill" id="ver" style="opacity:.6">phiên bản 25/07 15:28</div>
+  <div class="pill" id="ver" style="opacity:.6">phiên bản 25/07 15:50</div>
 </header>
 <main>
   <input type="file" id="cam" accept="image/*" capture="environment">
@@ -39083,7 +39083,7 @@ $('#btnCheck').onclick=async ()=>{
     await yieldUI();                       // cho giao dien kip ve truoc khi chay nang
     let canvas=null;
     try{
-      canvas=await fileToCanvas(batch[i].file,2400);   // doc anh lon CHI luc can
+      canvas=await fileToCanvas(batch[i].file,3600);   // do phan giai cao: giup quet QR nho / doc chu duoi tem khi chup xa (OCR chu in van cap 2400)
       const f=await analyze(canvas);
       renderCard(batch[i], f);
     }catch(err){
@@ -39198,8 +39198,13 @@ function computeChecks(f){
     if(sc>=0.6)b={s:'ok',msg:`Khớp (${Math.round(sc*100)}%): "${item}"`};
     else if(sc>=0.3)b={s:'warn',msg:`Khớp một phần (${Math.round(sc*100)}%) → in:"${item}" · mô tả:"${desc}"`};
     else b={s:'fail',msg:`KHÁC NHAU → in:"${item}" · mô tả:"${desc}"`};}
-  const rank={ok:0,warn:1,fail:2},w=Math.max(rank[a.s],rank[b.s]);
-  return {a,b,verdict:w===0?'ok':(w===1?'warn':'fail')};
+  // Check A (mã ↔ QR) là kiểm tra ĐỊNH DANH chính. Check B (mô tả) chỉ phụ trợ.
+  // LỖI (đỏ) CHỈ khi mã khác nhau. Mã khớp mà mô tả khác/không rõ -> CẦN XEM (vàng) để nhìn mắt.
+  let verdict;
+  if(a.s==='fail') verdict='fail';
+  else if(a.s==='ok' && b.s==='ok') verdict='ok';
+  else verdict='warn';
+  return {a,b,verdict};
 }
 function norm(s){return (s||'').toUpperCase().replace(/\s/g,'');}
 function loose(s){return norm(s).replace(/[O0]/g,'0').replace(/[I1L|]/g,'1').replace(/[S5]/g,'5').replace(/[B8]/g,'8');}
@@ -39282,7 +39287,7 @@ async function detectQR(src){
   try{ const zx=zxingDecode(src); if(zx) return zx; }catch(e){}
   if(typeof jsQR==='undefined') return null;
   const maxSide=Math.max(src.width,src.height);
-  let scales=[ maxSide>1500?1500/maxSide:1, 1100/maxSide, 800/maxSide ].filter(s=>s>0&&s<=1);
+  let scales=[ 1, 1500/maxSide, 1000/maxSide, 700/maxSide ].filter(s=>s>0&&s<=1);   // co ca do phan giai DAY DU
   scales=[...new Set(scales.map(s=>Math.round(s*1000)/1000))];
   for(const s of scales){
     const cv = s>=0.999? src : scaleCanvas(src,s);
@@ -39294,7 +39299,7 @@ async function detectQR(src){
 function zxingDecode(src){
   if(typeof ZXing==='undefined') return null;
   const maxSide=Math.max(src.width,src.height);
-  let scales=[ maxSide>1600?1600/maxSide:1, 1000/maxSide ].filter(s=>s>0&&s<=1);
+  let scales=[ 1, 2000/maxSide, 1300/maxSide ].filter(s=>s>0&&s<=1);   // thu ca do phan giai DAY DU (giup QR nho)
   scales=[...new Set(scales.map(s=>Math.round(s*1000)/1000))];
   for(let i=0;i<scales.length;i++){
     const s=scales[i]; const cv=s>=0.999?src:scaleCanvas(src,s);
