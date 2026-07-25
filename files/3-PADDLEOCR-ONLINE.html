@@ -73,7 +73,7 @@
   <h1>✅ Kiểm tra nhãn — PP-OCRv6</h1>
   <div class="pill" id="engine">Đang chuẩn bị…</div>
   <div class="pill" id="offline"></div>
-  <div class="pill" id="ver" style="opacity:.6">phiên bản 25/07 15:50</div>
+  <div class="pill" id="ver" style="opacity:.6">phiên bản 25/07 17:30</div>
 </header>
 <main>
   <input type="file" id="cam" accept="image/*" capture="environment">
@@ -39198,12 +39198,18 @@ function computeChecks(f){
     if(sc>=0.6)b={s:'ok',msg:`Khớp (${Math.round(sc*100)}%): "${item}"`};
     else if(sc>=0.3)b={s:'warn',msg:`Khớp một phần (${Math.round(sc*100)}%) → in:"${item}" · mô tả:"${desc}"`};
     else b={s:'fail',msg:`KHÁC NHAU → in:"${item}" · mô tả:"${desc}"`};}
-  // Check A (mã ↔ QR) là kiểm tra ĐỊNH DANH chính. Check B (mô tả) chỉ phụ trợ.
-  // LỖI (đỏ) CHỈ khi mã khác nhau. Mã khớp mà mô tả khác/không rõ -> CẦN XEM (vàng) để nhìn mắt.
+  // Check A (mã ↔ QR) là ĐỊNH DANH chính; Check B (mô tả) phụ trợ.
+  //  - Mã KHÁC nhau            -> LỖI (đỏ): sai hàng / dán nhầm tem.
+  //  - Mã khớp + mô tả khớp    -> ĐẠT (xanh).
+  //  - Mã khớp + KHÔNG đọc được mô tả -> ĐẠT (đã xác thực bằng mã; mô tả không bắt buộc).
+  //  - Mã khớp + mô tả ĐỌC ĐƯỢC nhưng KHÁC -> CẦN XEM (vàng): soi lại bằng mắt.
+  //  - Không đọc được mã       -> CẦN XEM.
   let verdict;
   if(a.s==='fail') verdict='fail';
-  else if(a.s==='ok' && b.s==='ok') verdict='ok';
-  else verdict='warn';
+  else if(a.s!=='ok') verdict='warn';
+  else if(b.s==='fail') verdict='warn';
+  else verdict='ok';
+  if(verdict==='ok' && b.s==='warn') b={s:'warn',msg:'Không đọc được mô tả — đã xác thực bằng MÃ nên vẫn ĐẠT (mô tả không bắt buộc).'};
   return {a,b,verdict};
 }
 function norm(s){return (s||'').toUpperCase().replace(/\s/g,'');}
